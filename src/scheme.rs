@@ -25,6 +25,9 @@ impl Handle {
             ..Default::default()
         }
     }
+    pub fn is_listener(&self) -> bool {
+        self.path.is_some()
+    }
 }
 
 #[derive(Default)]
@@ -84,7 +87,7 @@ impl SchemeBlockMut for ChanScheme {
         match buf {
             b"listen" => {
                 let (flags, remote) = match self.handles.get(&id) {
-                    Some(ref handle) if handle.path.is_some() => (handle.flags, handle.remote),
+                    Some(ref handle) if handle.is_listener() => (handle.flags, handle.remote),
                     _ => return Err(Error::new(EBADF))
                 };
                 if let Some(remote) = remote {
@@ -109,32 +112,26 @@ impl SchemeBlockMut for ChanScheme {
         }
     }
     fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> Result<Option<usize>> {
-        match self.handles.get_mut(&id) {
-            Some(handle) => match cmd {
-                F_GETFL => Ok(Some(handle.flags)),
-                F_SETFL => {
-                    handle.flags = arg;
-                    Ok(Some(0))
-                },
-                _ => Err(Error::new(EINVAL))
+        let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+        match cmd {
+            F_GETFL => Ok(Some(handle.flags)),
+            F_SETFL => {
+                handle.flags = arg;
+                Ok(Some(0))
             },
-            _ => Err(Error::new(EBADF))
+            _ => Err(Error::new(EINVAL))
         }
     }
     fn fevent(&mut self, id: usize, flags: usize) -> Result<Option<usize>> {
-        match self.handles.get_mut(&id) {
-            Some(handle) => {
-                handle.fevent = flags;
-                handle.notified_read = false;
-                handle.notified_write = false;
-                Ok(Some(id))
-            },
-            _ => Err(Error::new(EBADF))
-        }
+        let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+        handle.fevent = flags;
+        handle.notified_read = false;
+        handle.notified_write = false;
+        Ok(Some(id))
     }
     fn write(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
         let remote = match self.handles.get(&id) {
-            Some(handle) if handle.path.is_none() => handle.remote,
+            Some(handle) if !handle.is_listener() => handle.remote,
             _ => return Err(Error::new(EBADF))
         };
         if let Some(remote) = remote {
@@ -146,18 +143,14 @@ impl SchemeBlockMut for ChanScheme {
         }
     }
     fn fsync(&mut self, id: usize) -> Result<Option<usize>> {
-        match self.handles.get(&id) {
-            Some(handle) if handle.path.is_none() => Ok(Some(id)),
-            _ => Err(Error::new(EBADF))
-        }
+        self.handles.get(&id)
+            .ok_or(Error::new(EBADF))
+            .and(Ok(Some(id)))
     }
     fn read(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
-        let handle = match self.handles.get_mut(&id) {
-            Some(handle) => handle,
-            None => return Err(Error::new(EBADF))
-        };
-        if handle.path.is_some() {
-            // This is a listener, not a stream.
+        let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+
+        if handle.is_listener() {
             Err(Error::new(EBADF))
         } else if !handle.buffer.is_empty() {
             let len = buf.len().min(handle.buffer.len());
@@ -171,10 +164,7 @@ impl SchemeBlockMut for ChanScheme {
         }
     }
     fn close(&mut self, id: usize) -> Result<Option<usize>> {
-        let handle = match self.handles.remove(&id) {
-            Some(handle) => handle,
-            None => return Err(Error::new(EBADF))
-        };
+        let handle = self.handles.remove(&id).ok_or(Error::new(EBADF))?;
 
         if let Some(remote) = handle.remote {
             let mut remote = self.handles.get_mut(&remote).unwrap();
