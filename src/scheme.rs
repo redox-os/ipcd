@@ -1,8 +1,18 @@
-use std::collections::BTreeMap;
+use post_fevent;
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io
+};
 use syscall::{flag::*, error::*, Error, SchemeBlockMut, Result};
 
+#[derive(Default)]
 pub struct Handle {
     flags: usize,
+    fevent: usize,
+    notified_read: bool,
+    notified_write: bool,
+
     path: Option<String>,
     remote: Option<usize>,
     buffer: Vec<u8>
@@ -10,18 +20,9 @@ pub struct Handle {
 impl Handle {
     pub fn accept(&mut self) -> Self {
         Self {
-            flags: 0,
-            path: None,
-            remote: self.remote.take(),
-            buffer: Vec::new()
-        }
-    }
-    pub fn copy(&self) -> Self {
-        Self {
             flags: self.flags,
-            path: None,
-            remote: self.remote,
-            buffer: Vec::new()
+            remote: self.remote.take(),
+            ..Default::default()
         }
     }
 }
@@ -31,6 +32,25 @@ pub struct ChanScheme {
     handles: BTreeMap<usize, Handle>,
     listeners: BTreeMap<String, usize>,
     next_id: usize
+}
+impl ChanScheme {
+    pub fn post_fevents(&mut self, file: &mut File) -> io::Result<()> {
+        for (id, handle) in &mut self.handles {
+            if !handle.notified_write {
+                handle.notified_write = true;
+                post_fevent(file, *id, EVENT_WRITE)?;
+            }
+            if !handle.buffer.is_empty() {
+                if !handle.notified_read {
+                    handle.notified_read = true;
+                    post_fevent(file, *id, EVENT_READ)?;
+                }
+            } else {
+                handle.notified_read = false;
+            }
+        }
+        Ok(())
+    }
 }
 impl SchemeBlockMut for ChanScheme {
     fn open(&mut self, path: &[u8], flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
@@ -44,12 +64,8 @@ impl SchemeBlockMut for ChanScheme {
             return Err(Error::new(ENOENT));
         }
 
-        let mut handle = Handle {
-            flags: 0,
-            path: None,
-            remote: None,
-            buffer: Vec::new()
-        };
+        let mut handle = Handle::default();
+        handle.flags = flags;
 
         let id = self.next_id;
         if flags & O_CREAT == O_CREAT {
@@ -67,11 +83,11 @@ impl SchemeBlockMut for ChanScheme {
     fn dup(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
         match buf {
             b"listen" => {
-                let mut handle = match self.handles.get(&id) {
-                    Some(ref handle) if handle.path.is_some() => handle.copy(),
+                let (flags, remote) = match self.handles.get(&id) {
+                    Some(ref handle) if handle.path.is_some() => (handle.flags, handle.remote),
                     _ => return Err(Error::new(EBADF))
                 };
-                if let Some(remote) = handle.remote {
+                if let Some(remote) = remote {
                     let new_id = self.next_id;
                     let mut clone = self.handles.get_mut(&id).map(Handle::accept).unwrap();
 
@@ -81,7 +97,7 @@ impl SchemeBlockMut for ChanScheme {
                     let mut remote = self.handles.get_mut(&remote).unwrap();
                     remote.remote = Some(new_id);
                     Ok(Some(new_id))
-                } else if handle.flags & O_NONBLOCK == O_NONBLOCK {
+                } else if flags & O_NONBLOCK == O_NONBLOCK {
                     Err(Error::new(EAGAIN))
                 } else {
                     Ok(None)
@@ -95,12 +111,23 @@ impl SchemeBlockMut for ChanScheme {
     fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> Result<Option<usize>> {
         match self.handles.get_mut(&id) {
             Some(handle) => match cmd {
-                ::syscall::F_GETFL => Ok(Some(handle.flags)),
-                ::syscall::F_SETFL => {
+                F_GETFL => Ok(Some(handle.flags)),
+                F_SETFL => {
                     handle.flags = arg;
                     Ok(Some(0))
                 },
                 _ => Err(Error::new(EINVAL))
+            },
+            _ => Err(Error::new(EBADF))
+        }
+    }
+    fn fevent(&mut self, id: usize, flags: usize) -> Result<Option<usize>> {
+        match self.handles.get_mut(&id) {
+            Some(handle) => {
+                handle.fevent = flags;
+                handle.notified_read = false;
+                handle.notified_write = false;
+                Ok(Some(id))
             },
             _ => Err(Error::new(EBADF))
         }

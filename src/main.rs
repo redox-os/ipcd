@@ -50,8 +50,21 @@ fn main() -> Result<(), Box<::std::error::Error>> {
 
             true
         });
+
         if let Some(err) = error {
             return Err(Box::new(err));
         }
+
+        scheme.post_fevents(&mut scheme_file)?;
     }
+}
+fn post_fevent(file: &mut File, id: usize, flag: usize) -> io::Result<()> {
+    file.write(&syscall::Packet {
+        a: syscall::SYS_FEVENT,
+        b: id,
+        c: flag,
+        d: 1,
+        ..Default::default()
+    })
+    .map(|_| ())
 }
