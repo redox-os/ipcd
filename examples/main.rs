@@ -20,13 +20,13 @@ fn main() -> io::Result<()> {
         // First client not accepted yet
         assert_eq!(File::open("chan:hello_world").unwrap_err().kind(), io::ErrorKind::ConnectionRefused);
 
-        let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-        let mut dup = unsafe { File::from_raw_fd(dup) };
+        let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+        let mut stream = unsafe { File::from_raw_fd(stream) };
 
         println!("Testing basic I/O...");
 
-        dup.write(b"abc")?;
-        dup.flush()?;
+        stream.write(b"abc")?;
+        stream.flush()?;
         println!("-> Wrote message");
 
         assert_eq!(client.read(&mut buf)?, 3);
@@ -36,15 +36,15 @@ fn main() -> io::Result<()> {
         println!("Testing close...");
 
         drop(client);
-        assert_eq!(dup.write(b"a").unwrap_err().kind(), io::ErrorKind::BrokenPipe);
-        assert_eq!(dup.read(&mut buf)?, 0);
+        assert_eq!(stream.write(b"a").unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(stream.read(&mut buf)?, 0);
     }
     println!("Testing alternative connect method...");
     let client = syscall::dup(server.as_raw_fd(), b"connect").map_err(from_syscall_error)?;
     let mut client = unsafe { File::from_raw_fd(client) };
 
-    let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-    let mut dup = unsafe { File::from_raw_fd(dup) };
+    let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+    let mut stream = unsafe { File::from_raw_fd(stream) };
 
     println!("Testing blocking I/O...");
 
@@ -59,7 +59,7 @@ fn main() -> io::Result<()> {
         Ok(())
     });
 
-    assert_eq!(dup.read(&mut buf)?, 3);
+    assert_eq!(stream.read(&mut buf)?, 3);
     assert_eq!(&buf[..3], b"def");
     println!("-> Read message");
 
@@ -74,8 +74,8 @@ fn main() -> io::Result<()> {
     assert_eq!(client.read(&mut buf).unwrap_err().kind(), io::ErrorKind::WouldBlock);
     println!("-> Read would block");
     match syscall::dup(server.as_raw_fd(), b"listen") {
-        Ok(dup) => {
-            unsafe { File::from_raw_fd(dup); }
+        Ok(stream) => {
+            unsafe { File::from_raw_fd(stream); }
             panic!("this is supposed to fail");
         },
         Err(err) => {

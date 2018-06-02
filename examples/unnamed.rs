@@ -17,13 +17,13 @@ fn main() -> io::Result<()> {
     let client = syscall::dup(server.as_raw_fd(), b"connect").map_err(from_syscall_error)?;
     let mut client = unsafe { File::from_raw_fd(client) };
 
-    let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-    let mut dup = unsafe { File::from_raw_fd(dup) };
+    let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+    let mut stream = unsafe { File::from_raw_fd(stream) };
 
     println!("Testing basic I/O...");
 
-    dup.write(b"abc")?;
-    dup.flush()?;
+    stream.write(b"abc")?;
+    stream.flush()?;
     println!("-> Wrote message");
 
     assert_eq!(client.read(&mut buf)?, 3);

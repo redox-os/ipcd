@@ -65,8 +65,8 @@ fn main() -> io::Result<()> {
     assert_eq!(event.flags, syscall::EVENT_WRITE);
     println!("-> Accept event");
 
-    let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-    let mut dup = unsafe { File::from_raw_fd(dup) };
+    let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+    let mut stream = unsafe { File::from_raw_fd(stream) };
 
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_CLIENT);
@@ -74,7 +74,7 @@ fn main() -> io::Result<()> {
     println!("-> Writable event");
 
     event_file.write(&syscall::Event {
-        id: dup.as_raw_fd(),
+        id: stream.as_raw_fd(),
         flags: syscall::EVENT_READ | syscall::EVENT_WRITE,
         data: TOKEN_STREAM
     })?;
@@ -98,10 +98,10 @@ fn main() -> io::Result<()> {
     assert_eq!(event.flags, syscall::EVENT_READ);
     println!("-> Readable event");
 
-    assert_eq!(dup.read(&mut buf)?, 1);
+    assert_eq!(stream.read(&mut buf)?, 1);
     assert_eq!(buf[0], b'a');
 
-    dup.write(b"b")?;
+    stream.write(b"b")?;
 
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_CLIENT);
@@ -117,7 +117,7 @@ fn main() -> io::Result<()> {
     assert_eq!(event.data, TOKEN_STREAM);
     println!("-> Readable event (EOF)");
 
-    assert_eq!(dup.read(&mut buf)?, 0);
+    assert_eq!(stream.read(&mut buf)?, 0);
 
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_TIMER);
