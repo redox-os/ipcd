@@ -43,7 +43,7 @@ impl ChanScheme {
                 handle.notified_write = true;
                 post_fevent(file, *id, EVENT_WRITE)?;
             }
-            if !handle.buffer.is_empty() {
+            if !handle.buffer.is_empty() || (!handle.is_listener() && handle.remote.is_none()) {
                 if !handle.notified_read {
                     handle.notified_read = true;
                     post_fevent(file, *id, EVENT_READ)?;
@@ -157,6 +157,9 @@ impl SchemeBlockMut for ChanScheme {
             buf[..len].copy_from_slice(&handle.buffer[..len]);
             handle.buffer.drain(..len);
             Ok(Some(len))
+        } else if handle.remote.is_none() {
+            // Remote dropped, send EOF
+            Ok(Some(0))
         } else if handle.flags & O_NONBLOCK == O_NONBLOCK {
             Err(Error::new(EAGAIN))
         } else {

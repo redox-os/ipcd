@@ -13,22 +13,34 @@ fn from_syscall_error(error: syscall::Error) -> io::Error {
 }
 
 fn main() -> io::Result<()> {
+    let mut buf = [0; 5];
     let server = File::create("chan:hello_world")?;
+    {
+        let mut client = File::open("chan:hello_world")?;
+
+        let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+        let mut dup = unsafe { File::from_raw_fd(dup) };
+
+        println!("Testing basic I/O...");
+
+        dup.write(b"abc")?;
+        dup.flush()?;
+        println!("-> Wrote message");
+
+        assert_eq!(client.read(&mut buf)?, 3);
+        assert_eq!(&buf[..3], b"abc");
+        println!("-> Read message");
+
+        println!("Testing close...");
+
+        drop(client);
+        assert_eq!(dup.write(b"a").unwrap_err().kind(), io::ErrorKind::NotConnected);
+        assert_eq!(dup.read(&mut buf)?, 0);
+    }
     let mut client = File::open("chan:hello_world")?;
 
     let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
     let mut dup = unsafe { File::from_raw_fd(dup) };
-
-    println!("Testing basic I/O...");
-
-    dup.write(b"abc")?;
-    dup.flush()?;
-    println!("-> Wrote message");
-
-    let mut buf = [0; 5];
-    assert_eq!(client.read(&mut buf)?, 3);
-    assert_eq!(&buf[..3], b"abc");
-    println!("-> Read message");
 
     println!("Testing blocking I/O...");
 
@@ -63,6 +75,10 @@ fn main() -> io::Result<()> {
         println!("--> Thread: Writing...");
         dup.write(b"hello")?;
         dup.flush()?;
+        println!("--> Thread: Sleeping for 1 second...");
+        thread::sleep(Duration::from_secs(1));
+        println!("--> Thread: Dropping...");
+        drop(dup);
         Ok(())
     });
 
@@ -93,11 +109,15 @@ fn main() -> io::Result<()> {
     assert_eq!(event.data, 0);
     println!("-> Read event");
 
-    event_file.read(&mut event)?;
-    assert_eq!(event.id, client.as_raw_fd());
-    assert_eq!(event.flags, syscall::EVENT_READ);
-    assert_eq!(event.data, 0);
-    println!("-> Read event");
+    for _ in 0..2 {
+        event_file.read(&mut event)?;
+        assert_eq!(event.id, client.as_raw_fd());
+        assert_eq!(event.flags, syscall::EVENT_READ);
+        assert_eq!(event.data, 0);
+        println!("-> Read event");
+
+        client.read(&mut buf)?;
+    }
 
     event_file.read(&mut event)?;
     assert_eq!(event.id, time_file.as_raw_fd());
