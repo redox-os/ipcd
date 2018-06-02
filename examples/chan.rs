@@ -17,6 +17,8 @@ fn main() -> io::Result<()> {
     let server = File::create("chan:hello_world")?;
     {
         let mut client = File::open("chan:hello_world")?;
+        // First client not accepted yet
+        assert_eq!(File::open("chan:hello_world").unwrap_err().kind(), io::ErrorKind::ConnectionRefused);
 
         let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
         let mut dup = unsafe { File::from_raw_fd(dup) };
@@ -65,7 +67,21 @@ fn main() -> io::Result<()> {
 
     syscall::fcntl(client.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
         .map_err(from_syscall_error)?;
+    syscall::fcntl(server.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
+        .map_err(from_syscall_error)?;
     assert_eq!(client.read(&mut buf).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    println!("-> Read would block");
+    match syscall::dup(server.as_raw_fd(), b"listen") {
+        Ok(dup) => {
+            unsafe { File::from_raw_fd(dup); }
+            panic!("this is supposed to fail");
+        },
+        Err(err) => {
+            let err = from_syscall_error(err);
+            assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        }
+    }
+    println!("-> Accept would block");
 
     println!("Testing events...");
 
@@ -73,12 +89,19 @@ fn main() -> io::Result<()> {
         println!("--> Thread: Sleeping for 1 second...");
         thread::sleep(Duration::from_secs(1));
         println!("--> Thread: Writing...");
-        dup.write(b"hello")?;
-        dup.flush()?;
+        client.write(b"hello")?;
+        client.flush()?;
         println!("--> Thread: Sleeping for 1 second...");
         thread::sleep(Duration::from_secs(1));
         println!("--> Thread: Dropping...");
-        drop(dup);
+        drop(client);
+        println!("--> Thread: Sleeping for 3 seconds...");
+        thread::sleep(Duration::from_secs(3));
+        println!("--> Thread: Opening new...");
+        let mut client = File::open("chan:hello_world")?;
+        let mut buf = [0; 5];
+        assert_eq!(client.read(&mut buf)?, 0);
+        println!("--> Thread: Closing...");
         Ok(())
     });
 
@@ -87,45 +110,61 @@ fn main() -> io::Result<()> {
 
     let mut time = syscall::TimeSpec::default();
     time_file.read(&mut time)?;
-    time.tv_sec += 5;
+    time.tv_sec += 3;
     time_file.write(&time)?;
 
     event_file.write(&syscall::Event {
-        id: client.as_raw_fd(),
+        id: dup.as_raw_fd(),
         flags: syscall::EVENT_READ | syscall::EVENT_WRITE,
         data: 0
     })?;
     event_file.write(&syscall::Event {
+        id: server.as_raw_fd(),
+        flags: syscall::EVENT_WRITE | syscall::EVENT_READ,
+        data: 1
+    })?;
+    event_file.write(&syscall::Event {
         id: time_file.as_raw_fd(),
         flags: syscall::EVENT_READ,
-        data: 1
+        data: 2
     })?;
 
     let mut event = syscall::Event::default();
 
     event_file.read(&mut event)?;
-    assert_eq!(event.id, client.as_raw_fd());
+    assert_eq!(event.id, dup.as_raw_fd());
     assert_eq!(event.flags, syscall::EVENT_WRITE);
     assert_eq!(event.data, 0);
     println!("-> Read event");
 
     for _ in 0..2 {
         event_file.read(&mut event)?;
-        assert_eq!(event.id, client.as_raw_fd());
+        assert_eq!(event.id, dup.as_raw_fd());
         assert_eq!(event.flags, syscall::EVENT_READ);
         assert_eq!(event.data, 0);
         println!("-> Read event");
 
-        client.read(&mut buf)?;
+        dup.read(&mut buf)?;
     }
 
     event_file.read(&mut event)?;
     assert_eq!(event.id, time_file.as_raw_fd());
     assert_eq!(event.flags, syscall::EVENT_READ);
-    assert_eq!(event.data, 1);
+    assert_eq!(event.data, 2);
     println!("-> Timed out");
 
-    thread.join().unwrap().unwrap();
+    event_file.read(&mut event)?;
+    assert_eq!(event.id, server.as_raw_fd());
+    assert_eq!(event.flags, syscall::EVENT_WRITE);
+    assert_eq!(event.data, 1);
+    println!("-> Read accept event");
+
+    let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+    let dup = unsafe { File::from_raw_fd(dup) };
+
+    drop(dup);
+
+    thread.join().unwrap()?;
 
     println!("Everything tested!");
 

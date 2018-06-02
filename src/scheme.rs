@@ -39,17 +39,29 @@ pub struct ChanScheme {
 impl ChanScheme {
     pub fn post_fevents(&mut self, file: &mut File) -> io::Result<()> {
         for (id, handle) in &mut self.handles {
-            if !handle.notified_write {
-                handle.notified_write = true;
-                post_fevent(file, *id, EVENT_WRITE)?;
-            }
-            if !handle.buffer.is_empty() || (!handle.is_listener() && handle.remote.is_none()) {
-                if !handle.notified_read {
-                    handle.notified_read = true;
-                    post_fevent(file, *id, EVENT_READ)?;
+            if handle.is_listener() {
+                if handle.remote.is_some() {
+                    // Send writable because that's what smolnetd does for TcpListener
+                    if !handle.notified_write {
+                        handle.notified_write = true;
+                        post_fevent(file, *id, EVENT_WRITE)?;
+                    }
+                } else {
+                    handle.notified_write = false;
                 }
             } else {
-                handle.notified_read = false;
+                if !handle.notified_write {
+                    handle.notified_write = true;
+                    post_fevent(file, *id, EVENT_WRITE)?;
+                }
+                if !handle.buffer.is_empty() || handle.remote.is_none() {
+                    if !handle.notified_read {
+                        handle.notified_read = true;
+                        post_fevent(file, *id, EVENT_READ)?;
+                    }
+                } else {
+                    handle.notified_read = false;
+                }
             }
         }
         Ok(())
@@ -61,22 +73,23 @@ impl SchemeBlockMut for ChanScheme {
         if path.is_empty() {
             return Err(Error::new(EPERM));
         }
-        if flags & O_CREAT == O_CREAT && self.listeners.contains_key(path) {
-            return Err(Error::new(EADDRINUSE));
-        } else if flags & O_CREAT != O_CREAT && !self.listeners.contains_key(path) {
-            return Err(Error::new(ENOENT));
-        }
 
         let mut handle = Handle::default();
         handle.flags = flags;
 
         let id = self.next_id;
         if flags & O_CREAT == O_CREAT {
+            if self.listeners.contains_key(path) {
+                return Err(Error::new(EADDRINUSE));
+            }
             self.listeners.insert(String::from(path), id);
             handle.path = Some(String::from(path));
         } else {
-            let listener = self.listeners[path];
+            let listener = self.listeners.get(path).ok_or(Error::new(ENOENT))?;
             let handle = self.handles.get_mut(&listener).expect("orphan listener left over");
+            if handle.remote.is_some() {
+                return Err(Error::new(ECONNREFUSED));
+            }
             handle.remote = Some(id);
         }
         self.handles.insert(id, handle);
