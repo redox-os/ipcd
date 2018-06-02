@@ -67,9 +67,11 @@ impl ChanScheme {
                     handle.notified_write = false;
                 }
             } else {
-                if !handle.notified_write {
-                    handle.notified_write = true;
-                    post_fevent(file, *id, EVENT_WRITE)?;
+                if let Connection::Open(_) = handle.remote {
+                    if !handle.notified_write {
+                        handle.notified_write = true;
+                        post_fevent(file, *id, EVENT_WRITE)?;
+                    }
                 }
                 if !handle.buffer.is_empty() || handle.remote == Connection::Closed {
                     if !handle.notified_read {

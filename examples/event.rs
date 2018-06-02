@@ -1,0 +1,128 @@
+extern crate syscall;
+
+use std::{
+    fs::File,
+    io::{self, prelude::*},
+    os::unix::io::{AsRawFd, FromRawFd}
+};
+
+fn from_syscall_error(error: syscall::Error) -> io::Error {
+    io::Error::from_raw_os_error(error.errno as i32)
+}
+
+fn main() -> io::Result<()> {
+    let server = File::create("chan:hello_world")?;
+
+    println!("Testing events...");
+
+    syscall::fcntl(server.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
+        .map_err(from_syscall_error)?;
+
+    let mut event_file = File::open("event:")?;
+    let mut time_file = File::open(format!("time:{}", syscall::CLOCK_MONOTONIC))?;
+
+    let mut time = syscall::TimeSpec::default();
+    time_file.read(&mut time)?;
+    time.tv_sec += 1;
+    time_file.write(&time)?;
+    time.tv_sec += 2;
+    time_file.write(&time)?;
+    time.tv_sec += 2;
+    time_file.write(&time)?;
+
+    const TOKEN_TIMER: usize = 0;
+    const TOKEN_STREAM: usize = 1;
+    const TOKEN_SERVER: usize = 2;
+    const TOKEN_CLIENT: usize = 3;
+
+    event_file.write(&syscall::Event {
+        id: time_file.as_raw_fd(),
+        flags: syscall::EVENT_READ,
+        data: TOKEN_TIMER
+    })?;
+    event_file.write(&syscall::Event {
+        id: server.as_raw_fd(),
+        flags: syscall::EVENT_WRITE | syscall::EVENT_READ,
+        data: TOKEN_SERVER
+    })?;
+
+    let mut event = syscall::Event::default();
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_TIMER);
+    assert_eq!(event.flags, syscall::EVENT_READ);
+    println!("-> Timed out");
+
+    let mut client = File::open("chan:hello_world")?;
+    event_file.write(&syscall::Event {
+        id: client.as_raw_fd(),
+        flags: syscall::EVENT_WRITE | syscall::EVENT_READ,
+        data: TOKEN_CLIENT
+    })?;
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_SERVER);
+    assert_eq!(event.flags, syscall::EVENT_WRITE);
+    println!("-> Accept event");
+
+    let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
+    let mut dup = unsafe { File::from_raw_fd(dup) };
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_CLIENT);
+    assert_eq!(event.flags, syscall::EVENT_WRITE);
+    println!("-> Writable event");
+
+    event_file.write(&syscall::Event {
+        id: dup.as_raw_fd(),
+        flags: syscall::EVENT_READ | syscall::EVENT_WRITE,
+        data: TOKEN_STREAM
+    })?;
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_STREAM);
+    assert_eq!(event.flags, syscall::EVENT_WRITE);
+    println!("-> Writable event");
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_TIMER);
+    assert_eq!(event.flags, syscall::EVENT_READ);
+    println!("-> Timed out");
+
+    client.write(b"a")?;
+
+    let mut buf = [0; 5];
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_STREAM);
+    assert_eq!(event.flags, syscall::EVENT_READ);
+    println!("-> Readable event");
+
+    assert_eq!(dup.read(&mut buf)?, 1);
+    assert_eq!(buf[0], b'a');
+
+    dup.write(b"b")?;
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_CLIENT);
+    assert_eq!(event.flags, syscall::EVENT_READ);
+    println!("-> Readable event");
+
+    assert_eq!(client.read(&mut buf)?, 1);
+    assert_eq!(buf[0], b'b');
+
+    drop(client);
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_STREAM);
+    println!("-> Readable event (EOF)");
+
+    assert_eq!(dup.read(&mut buf)?, 0);
+
+    event_file.read(&mut event)?;
+    assert_eq!(event.data, TOKEN_TIMER);
+    println!("-> Timed out");
+
+    println!("Everything tested!");
+    Ok(())
+}
