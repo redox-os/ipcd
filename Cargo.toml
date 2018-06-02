@@ -1,7 +1,6 @@
 [package]
 name = "chand"
 version = "0.1.0"
-authors = ["jD91mZM2 <me@krake.one>"]
 
 [dependencies]
 redox_syscall = "0.1.40"
