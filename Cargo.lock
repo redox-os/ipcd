@@ -1,5 +1,5 @@
 [[package]]
-name = "chand"
+name = "ipcd"
 version = "0.1.0"
 dependencies = [
  "redox_syscall 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)",

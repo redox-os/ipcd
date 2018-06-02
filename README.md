@@ -1,4 +1,4 @@
-# chand
+# ipcd
 
 A userspace daemon for interprocess communication.
 
