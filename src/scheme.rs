@@ -2,15 +2,25 @@ use std::collections::BTreeMap;
 use syscall::{flag::*, error::*, Error, SchemeBlockMut, Result};
 
 pub struct Handle {
+    flags: usize,
     path: Option<String>,
     remote: Option<usize>,
     buffer: Vec<u8>
 }
 impl Handle {
-    pub fn dup(&mut self) -> Self {
+    pub fn accept(&mut self) -> Self {
         Self {
+            flags: 0,
             path: None,
             remote: self.remote.take(),
+            buffer: Vec::new()
+        }
+    }
+    pub fn copy(&self) -> Self {
+        Self {
+            flags: self.flags,
+            path: None,
+            remote: self.remote,
             buffer: Vec::new()
         }
     }
@@ -35,6 +45,7 @@ impl SchemeBlockMut for ChanScheme {
         }
 
         let mut handle = Handle {
+            flags: 0,
             path: None,
             remote: None,
             buffer: Vec::new()
@@ -56,13 +67,13 @@ impl SchemeBlockMut for ChanScheme {
     fn dup(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
         match buf {
             b"listen" => {
-                let mut remote = match self.handles.get(&id) {
-                    Some(ref handle) if handle.path.is_some() => handle.remote,
+                let mut handle = match self.handles.get(&id) {
+                    Some(ref handle) if handle.path.is_some() => handle.copy(),
                     _ => return Err(Error::new(EBADF))
                 };
-                if let Some(remote) = remote {
+                if let Some(remote) = handle.remote {
                     let new_id = self.next_id;
-                    let mut clone = self.handles.get_mut(&id).map(Handle::dup).unwrap();
+                    let mut clone = self.handles.get_mut(&id).map(Handle::accept).unwrap();
 
                     self.handles.insert(new_id, clone);
                     self.next_id += 1;
@@ -70,6 +81,8 @@ impl SchemeBlockMut for ChanScheme {
                     let mut remote = self.handles.get_mut(&remote).unwrap();
                     remote.remote = Some(new_id);
                     Ok(Some(new_id))
+                } else if handle.flags & O_NONBLOCK == O_NONBLOCK {
+                    Err(Error::new(EAGAIN))
                 } else {
                     Ok(None)
                 }
@@ -77,6 +90,19 @@ impl SchemeBlockMut for ChanScheme {
             _ => {
                 return Err(Error::new(EBADF));
             }
+        }
+    }
+    fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> Result<Option<usize>> {
+        match self.handles.get_mut(&id) {
+            Some(handle) => match cmd {
+                ::syscall::F_GETFL => Ok(Some(handle.flags)),
+                ::syscall::F_SETFL => {
+                    handle.flags = arg;
+                    Ok(Some(0))
+                },
+                _ => Err(Error::new(EINVAL))
+            },
+            _ => Err(Error::new(EBADF))
         }
     }
     fn write(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
@@ -106,13 +132,15 @@ impl SchemeBlockMut for ChanScheme {
         if handle.path.is_some() {
             // This is a listener, not a stream.
             Err(Error::new(EBADF))
-        } else if handle.buffer.is_empty() {
-            Ok(None)
-        } else {
+        } else if !handle.buffer.is_empty() {
             let len = buf.len().min(handle.buffer.len());
             buf[..len].copy_from_slice(&handle.buffer[..len]);
             handle.buffer.drain(..len);
             Ok(Some(len))
+        } else if handle.flags & O_NONBLOCK == O_NONBLOCK {
+            Err(Error::new(EAGAIN))
+        } else {
+            Ok(None)
         }
     }
     fn close(&mut self, id: usize) -> Result<Option<usize>> {
