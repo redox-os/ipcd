@@ -36,7 +36,7 @@ fn main() -> io::Result<()> {
         println!("Testing close...");
 
         drop(client);
-        assert_eq!(dup.write(b"a").unwrap_err().kind(), io::ErrorKind::NotConnected);
+        assert_eq!(dup.write(b"a").unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(dup.read(&mut buf)?, 0);
     }
     println!("Testing alternative connect method...");

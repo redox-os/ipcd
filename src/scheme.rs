@@ -194,7 +194,7 @@ impl SchemeBlockMut for ChanScheme {
         } else if remote == Connection::Waiting {
             Ok(None)
         } else {
-            Err(Error::new(ENOTCONN))
+            Err(Error::new(EPIPE))
         }
     }
     fn fsync(&mut self, id: usize) -> Result<Option<usize>> {
