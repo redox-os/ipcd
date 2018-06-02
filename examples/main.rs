@@ -39,7 +39,9 @@ fn main() -> io::Result<()> {
         assert_eq!(dup.write(b"a").unwrap_err().kind(), io::ErrorKind::NotConnected);
         assert_eq!(dup.read(&mut buf)?, 0);
     }
-    let mut client = File::open("chan:hello_world")?;
+    println!("Testing alternative connect method...");
+    let client = syscall::dup(server.as_raw_fd(), b"connect").map_err(from_syscall_error)?;
+    let mut client = unsafe { File::from_raw_fd(client) };
 
     let dup = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
     let mut dup = unsafe { File::from_raw_fd(dup) };
@@ -135,14 +137,14 @@ fn main() -> io::Result<()> {
     assert_eq!(event.id, dup.as_raw_fd());
     assert_eq!(event.flags, syscall::EVENT_WRITE);
     assert_eq!(event.data, 0);
-    println!("-> Read event");
+    println!("-> Writable event");
 
     for _ in 0..2 {
         event_file.read(&mut event)?;
         assert_eq!(event.id, dup.as_raw_fd());
         assert_eq!(event.flags, syscall::EVENT_READ);
         assert_eq!(event.data, 0);
-        println!("-> Read event");
+        println!("-> Readable event");
 
         dup.read(&mut buf)?;
     }
