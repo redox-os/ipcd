@@ -9,7 +9,7 @@ use syscall::SchemeBlockMut;
 
 mod scheme;
 
-use scheme::ChanScheme;
+use scheme::IpcScheme;
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<::std::error::Error>> {
     }
 
     let mut scheme_file = File::create(":chan")?;
-    let mut scheme = ChanScheme::default();
+    let mut scheme = IpcScheme::default();
 
     let mut todo = VecDeque::with_capacity(16);
 

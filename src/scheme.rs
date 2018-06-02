@@ -48,12 +48,12 @@ impl Handle {
 }
 
 #[derive(Default)]
-pub struct ChanScheme {
+pub struct IpcScheme {
     handles: BTreeMap<usize, Handle>,
     listeners: BTreeMap<String, usize>,
     next_id: usize
 }
-impl ChanScheme {
+impl IpcScheme {
     pub fn post_fevents(&mut self, file: &mut File) -> io::Result<()> {
         for (id, handle) in &mut self.handles {
             if handle.is_listener() {
@@ -86,7 +86,7 @@ impl ChanScheme {
         Ok(())
     }
 }
-impl SchemeBlockMut for ChanScheme {
+impl SchemeBlockMut for IpcScheme {
     fn open(&mut self, path: &[u8], flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
         let path = ::std::str::from_utf8(path).or(Err(Error::new(EPERM)))?;
 
