@@ -73,19 +73,25 @@ pub struct IpcScheme {
 impl IpcScheme {
     pub fn post_fevents(&mut self, file: &mut File) -> io::Result<()> {
         for (id, handle) in &mut self.handles {
-            if handle.fevent & EVENT_WRITE == EVENT_WRITE {
-                if let Connection::Open(_) = handle.remote {
-                    // Send writable even for listeners because that's what smolnetd does for TcpListener
-                    if !handle.notified_write {
-                        handle.notified_write = true;
-                        post_fevent(file, *id, EVENT_WRITE)?;
+            match handle.extra {
+                Extra::Listener(_) => {
+                    if let Connection::Open(_) = handle.remote {
+                        // Send writable because that's what smolnetd does for TcpListener
+                        if !handle.notified_write {
+                            handle.notified_write = true;
+                            post_fevent(file, *id, EVENT_WRITE)?;
+                        }
+                    } else {
+                        handle.notified_write = false;
                     }
-                } else {
-                    handle.notified_write = false;
-                }
-            }
-            if let Extra::Client(ref mut client) = handle.extra {
-                if handle.fevent & EVENT_READ == EVENT_READ {
+                },
+                Extra::Client(ref mut client) => {
+                    if let Connection::Open(_) = handle.remote {
+                        if !handle.notified_write {
+                            handle.notified_write = true;
+                            post_fevent(file, *id, EVENT_WRITE)?;
+                        }
+                    }
                     if !client.buffer.is_empty() || handle.remote == Connection::Closed {
                         if !handle.notified_read {
                             handle.notified_read = true;

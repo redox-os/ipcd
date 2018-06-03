@@ -22,6 +22,8 @@ fn dup(file: &File, buf: &str) -> io::Result<File> {
 fn main() -> io::Result<()> {
     let server = File::create("chan:hello_world")?;
 
+    println!("Testing events...");
+
     nonblock(&server)?;
 
     let mut event_file = File::open("event:")?;
@@ -34,8 +36,6 @@ fn main() -> io::Result<()> {
     time.tv_sec += 2;
     time_file.write(&time)?;
     time.tv_sec += 2;
-    time_file.write(&time)?;
-    time.tv_sec += 1;
     time_file.write(&time)?;
 
     const TOKEN_TIMER: usize = 0;
@@ -56,8 +56,6 @@ fn main() -> io::Result<()> {
 
     let mut event = syscall::Event::default();
 
-    println!("Testing accept events...");
-
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_TIMER);
     assert_eq!(event.flags, syscall::EVENT_READ);
@@ -74,8 +72,6 @@ fn main() -> io::Result<()> {
     assert_eq!(event.data, TOKEN_SERVER);
     assert_eq!(event.flags, syscall::EVENT_WRITE);
     println!("-> Accept event");
-
-    println!("Testing write events...");
 
     let mut stream = dup(&server, "listen")?;
 
@@ -99,8 +95,6 @@ fn main() -> io::Result<()> {
     assert_eq!(event.data, TOKEN_TIMER);
     assert_eq!(event.flags, syscall::EVENT_READ);
     println!("-> Timed out");
-
-    println!("Testing read events...");
 
     client.write(b"a")?;
 
@@ -131,20 +125,6 @@ fn main() -> io::Result<()> {
     println!("-> Readable event (EOF)");
 
     assert_eq!(stream.read(&mut buf)?, 0);
-
-    event_file.read(&mut event)?;
-    assert_eq!(event.data, TOKEN_TIMER);
-    println!("-> Timed out");
-
-    println!("Testing no events...");
-
-    event_file.write(&syscall::Event {
-        id: server.as_raw_fd(),
-        flags: 0,
-        data: TOKEN_SERVER
-    })?;
-
-    let _client = File::open("chan:hello_world")?;
 
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_TIMER);
