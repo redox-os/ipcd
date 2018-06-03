@@ -9,14 +9,22 @@ use std::{
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
 }
+fn nonblock(file: &File) -> io::Result<()> {
+    syscall::fcntl(file.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
+        .map(|_| ())
+        .map_err(from_syscall_error)
+}
+fn dup(file: &File, buf: &str) -> io::Result<File> {
+    let stream = syscall::dup(file.as_raw_fd(), buf.as_bytes()).map_err(from_syscall_error)?;
+    Ok(unsafe { File::from_raw_fd(stream) })
+}
 
 fn main() -> io::Result<()> {
     let server = File::create("chan:hello_world")?;
 
     println!("Testing events...");
 
-    syscall::fcntl(server.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
-        .map_err(from_syscall_error)?;
+    nonblock(&server)?;
 
     let mut event_file = File::open("event:")?;
     let mut time_file = File::open(format!("time:{}", syscall::CLOCK_MONOTONIC))?;
@@ -65,8 +73,7 @@ fn main() -> io::Result<()> {
     assert_eq!(event.flags, syscall::EVENT_WRITE);
     println!("-> Accept event");
 
-    let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-    let mut stream = unsafe { File::from_raw_fd(stream) };
+    let mut stream = dup(&server, "listen")?;
 
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_CLIENT);

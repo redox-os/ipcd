@@ -9,16 +9,17 @@ use std::{
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
 }
+fn dup(file: &File, buf: &str) -> io::Result<File> {
+    let stream = syscall::dup(file.as_raw_fd(), buf.as_bytes()).map_err(from_syscall_error)?;
+    Ok(unsafe { File::from_raw_fd(stream) })
+}
 
 fn main() -> io::Result<()> {
     let mut buf = [0; 5];
     let server = File::create("chan:")?;
 
-    let client = syscall::dup(server.as_raw_fd(), b"connect").map_err(from_syscall_error)?;
-    let mut client = unsafe { File::from_raw_fd(client) };
-
-    let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-    let mut stream = unsafe { File::from_raw_fd(stream) };
+    let mut client = dup(&server, "connect")?;
+    let mut stream = dup(&server, "listen")?;
 
     println!("Testing basic I/O...");
 

@@ -11,6 +11,15 @@ use std::{
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
 }
+fn nonblock(file: &File) -> io::Result<()> {
+    syscall::fcntl(file.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
+        .map(|_| ())
+        .map_err(from_syscall_error)
+}
+fn dup(file: &File, buf: &str) -> io::Result<File> {
+    let stream = syscall::dup(file.as_raw_fd(), buf.as_bytes()).map_err(from_syscall_error)?;
+    Ok(unsafe { File::from_raw_fd(stream) })
+}
 
 fn main() -> io::Result<()> {
     let mut buf = [0; 5];
@@ -20,8 +29,7 @@ fn main() -> io::Result<()> {
         // First client not accepted yet
         assert_eq!(File::open("chan:hello_world").unwrap_err().kind(), io::ErrorKind::ConnectionRefused);
 
-        let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-        let mut stream = unsafe { File::from_raw_fd(stream) };
+        let mut stream = dup(&server, "listen")?;
 
         println!("Testing basic I/O...");
 
@@ -40,11 +48,9 @@ fn main() -> io::Result<()> {
         assert_eq!(stream.read(&mut buf)?, 0);
     }
     println!("Testing alternative connect method...");
-    let client = syscall::dup(server.as_raw_fd(), b"connect").map_err(from_syscall_error)?;
-    let mut client = unsafe { File::from_raw_fd(client) };
 
-    let stream = syscall::dup(server.as_raw_fd(), b"listen").map_err(from_syscall_error)?;
-    let mut stream = unsafe { File::from_raw_fd(stream) };
+    let mut client = dup(&server, "connect")?;
+    let mut stream = dup(&server, "listen")?;
 
     println!("Testing blocking I/O...");
 
@@ -67,23 +73,32 @@ fn main() -> io::Result<()> {
 
     println!("Testing non-blocking I/O...");
 
-    syscall::fcntl(client.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
-        .map_err(from_syscall_error)?;
-    syscall::fcntl(server.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
-        .map_err(from_syscall_error)?;
+    nonblock(&client)?;
+    nonblock(&server)?;
+
     assert_eq!(client.read(&mut buf).unwrap_err().kind(), io::ErrorKind::WouldBlock);
     println!("-> Read would block");
-    match syscall::dup(server.as_raw_fd(), b"listen") {
-        Ok(stream) => {
-            unsafe { File::from_raw_fd(stream); }
-            panic!("this is supposed to fail");
-        },
-        Err(err) => {
-            let err = from_syscall_error(err);
-            assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
-        }
-    }
+
+    assert_eq!(dup(&server, "listen").unwrap_err().kind(), io::ErrorKind::WouldBlock);
     println!("-> Accept would block");
+
+    drop(client);
+    {
+        let mut client = File::open("chan:hello_world")?;
+        nonblock(&client)?;
+
+        assert_eq!(client.write(b"a").unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        println!("-> Write before accept would block");
+    }
+
+    assert_eq!(dup(&server, "listen").unwrap_err().kind(), io::ErrorKind::ConnectionReset);
+    println!("-> Server can't accept dropped client");
+
+    let mut client = dup(&server, "connect")?;
+    nonblock(&client)?;
+
+    assert_eq!(client.write(b"a").unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    println!("-> Write before accept would block (alternative connection method)");
 
     println!("Everything tested!");
     Ok(())
