@@ -40,7 +40,6 @@ impl Default for Connection {
 #[derive(Debug, Default)]
 pub struct Handle {
     flags: usize,
-    fevent: usize,
     notified_read: bool,
     notified_write: bool,
 
@@ -198,9 +197,8 @@ impl SchemeBlockMut for IpcScheme {
             _ => Err(Error::new(EINVAL))
         }
     }
-    fn fevent(&mut self, id: usize, flags: usize) -> Result<Option<usize>> {
+    fn fevent(&mut self, id: usize, _flags: usize) -> Result<Option<usize>> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
-        handle.fevent = flags;
         handle.notified_read = false;
         handle.notified_write = false;
         Ok(Some(id))
