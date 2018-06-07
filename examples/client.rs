@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, prelude::*}
+    io
 };
 
 fn main() -> io::Result<()> {
