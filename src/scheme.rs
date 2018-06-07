@@ -54,11 +54,16 @@ impl Handle {
             ..Default::default()
         }
     }
-    pub fn is_listener(&self) -> bool {
-        if let Extra::Listener(_) = self.extra {
-            true
-        } else {
-            false
+    pub fn require_listener(&self) -> Result<()> {
+        match self.extra {
+            Extra::Listener(_) => Ok(()),
+            _ => Err(Error::new(EBADF))
+        }
+    }
+    pub fn require_client(&self) -> Result<()> {
+        match self.extra {
+            Extra::Client(_) => Ok(()),
+            _ => Err(Error::new(EBADF))
         }
     }
 }
@@ -138,9 +143,10 @@ impl SchemeBlockMut for IpcScheme {
     fn dup(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
         match buf {
             b"listen" => {
-                let (flags, remote) = match self.handles.get(&id) {
-                    Some(ref handle) if handle.is_listener() => (handle.flags, handle.remote),
-                    _ => return Err(Error::new(EBADF))
+                let (flags, remote) = {
+                    let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+                    handle.require_listener()?;
+                    (handle.flags, handle.remote)
                 };
                 if let Connection::Open(remote) = remote {
                     let new_id = self.next_id;
@@ -167,14 +173,14 @@ impl SchemeBlockMut for IpcScheme {
                 let mut new = Handle::default();
                 let new_id = self.next_id;
 
-                match self.handles.get_mut(&id) {
-                    Some(ref mut handle) if handle.is_listener() => {
-                        if handle.remote != Connection::Waiting {
-                            return Err(Error::new(ECONNREFUSED));
-                        }
-                        handle.remote = Connection::Open(new_id);
-                    },
-                    _ => return Err(Error::new(EBADF))
+                {
+                    let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+                    handle.require_listener()?;
+
+                    if handle.remote != Connection::Waiting {
+                        return Err(Error::new(ECONNREFUSED));
+                    }
+                    handle.remote = Connection::Open(new_id);
                 }
 
                 self.handles.insert(new_id, new);
@@ -204,9 +210,10 @@ impl SchemeBlockMut for IpcScheme {
         Ok(Some(id))
     }
     fn write(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
-        let (flags, remote) = match self.handles.get(&id) {
-            Some(handle) if !handle.is_listener() => (handle.flags, handle.remote),
-            _ => return Err(Error::new(EBADF))
+        let (flags, remote) = {
+            let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+            handle.require_client()?;
+            (handle.flags, handle.remote)
         };
         if let Connection::Open(remote) = remote {
             let mut remote = self.handles.get_mut(&remote).unwrap();
