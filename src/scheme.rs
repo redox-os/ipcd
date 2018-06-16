@@ -85,8 +85,6 @@ impl IpcScheme {
                             handle.notified_write = true;
                             post_fevent(file, *id, EVENT_WRITE)?;
                         }
-                    } else {
-                        handle.notified_write = false;
                     }
                 },
                 Extra::Client(ref mut client) => {
@@ -110,6 +108,14 @@ impl IpcScheme {
         Ok(())
     }
 }
+
+fn connect(target: &mut Handle, new_id: usize) -> Result<()> {
+    if target.remote != Connection::Waiting {
+        return Err(Error::new(ECONNREFUSED));
+    }
+    target.remote = Connection::Open(new_id);
+    Ok(())
+}
 impl SchemeBlockMut for IpcScheme {
     fn open(&mut self, path: &[u8], flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
         let path = ::std::str::from_utf8(path).or(Err(Error::new(EPERM)))?;
@@ -117,28 +123,26 @@ impl SchemeBlockMut for IpcScheme {
         let mut new = Handle::default();
         new.flags = flags;
 
-        let id = self.next_id;
+        let new_id = self.next_id;
         if flags & O_CREAT == O_CREAT {
             if self.listeners.contains_key(path) {
                 return Err(Error::new(EADDRINUSE));
             }
             let mut listener = Listener::default();
             if !path.is_empty() {
-                self.listeners.insert(String::from(path), id);
+                self.listeners.insert(String::from(path), new_id);
                 listener.path = Some(String::from(path));
             }
             new.extra = Extra::Listener(listener);
         } else {
-            let listener = self.listeners.get(path).ok_or(Error::new(ENOENT))?;
-            let handle = self.handles.get_mut(&listener).expect("orphan listener left over");
-            if handle.remote != Connection::Waiting {
-                return Err(Error::new(ECONNREFUSED));
-            }
-            handle.remote = Connection::Open(id);
+            let listener_id = self.listeners.get(path).ok_or(Error::new(ENOENT))?;
+            let listener = self.handles.get_mut(listener_id).expect("orphan listener left over");
+            connect(listener, new_id)?;
         }
-        self.handles.insert(id, new);
+
+        self.handles.insert(new_id, new);
         self.next_id += 1;
-        Ok(Some(id))
+        Ok(Some(new_id))
     }
     fn dup(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
         match buf {
@@ -148,14 +152,14 @@ impl SchemeBlockMut for IpcScheme {
                     handle.require_listener()?;
                     (handle.flags, handle.remote)
                 };
-                if let Connection::Open(remote) = remote {
+                if let Connection::Open(remote_id) = remote {
                     let new_id = self.next_id;
 
                     let mut clone = self.handles.get_mut(&id).map(Handle::accept).unwrap();
 
                     {
                         // This might fail if the remote side closed early
-                        let mut remote = self.handles.get_mut(&remote).ok_or(Error::new(ECONNRESET))?;
+                        let mut remote = self.handles.get_mut(&remote_id).ok_or(Error::new(ECONNRESET))?;
                         remote.remote = Connection::Open(new_id);
                     }
 
@@ -177,10 +181,7 @@ impl SchemeBlockMut for IpcScheme {
                     let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
                     handle.require_listener()?;
 
-                    if handle.remote != Connection::Waiting {
-                        return Err(Error::new(ECONNREFUSED));
-                    }
-                    handle.remote = Connection::Open(new_id);
+                    connect(handle, new_id)?;
                 }
 
                 self.handles.insert(new_id, new);
@@ -215,8 +216,8 @@ impl SchemeBlockMut for IpcScheme {
             handle.require_client()?;
             (handle.flags, handle.remote)
         };
-        if let Connection::Open(remote) = remote {
-            let mut remote = self.handles.get_mut(&remote).unwrap();
+        if let Connection::Open(remote_id) = remote {
+            let mut remote = self.handles.get_mut(&remote_id).unwrap();
             match remote.extra {
                 Extra::Client(ref mut client) => {
                     client.buffer.extend(buf);
@@ -264,8 +265,8 @@ impl SchemeBlockMut for IpcScheme {
 
         match handle.extra {
             Extra::Client(_) => {
-                if let Connection::Open(remote) = handle.remote {
-                    let mut remote = self.handles.get_mut(&remote).unwrap();
+                if let Connection::Open(remote_id) = handle.remote {
+                    let mut remote = self.handles.get_mut(&remote_id).unwrap();
                     remote.remote = Connection::Closed;
                 }
             },
