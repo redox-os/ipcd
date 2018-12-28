@@ -1,5 +1,3 @@
-extern crate syscall;
-
 use std::{
     fs::File,
     io::{self, prelude::*},

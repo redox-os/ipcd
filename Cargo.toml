@@ -1,6 +1,7 @@
 [package]
 name = "ipcd"
 version = "0.1.0"
+edition = "2018"
 
 [dependencies]
 redox_syscall = "0.1.40"

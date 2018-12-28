@@ -1,6 +1,7 @@
-use post_fevent;
+use crate::post_fevent;
 use std::{
-    collections::BTreeMap,
+    cmp,
+    collections::HashMap,
     fs::File,
     io,
     mem
@@ -69,12 +70,12 @@ impl Handle {
 }
 
 #[derive(Default)]
-pub struct IpcScheme {
-    handles: BTreeMap<usize, Handle>,
-    listeners: BTreeMap<String, usize>,
+pub struct ChanScheme {
+    handles: HashMap<usize, Handle>,
+    listeners: HashMap<String, usize>,
     next_id: usize
 }
-impl IpcScheme {
+impl ChanScheme {
     pub fn post_fevents(&mut self, file: &mut File) -> io::Result<()> {
         for (id, handle) in &mut self.handles {
             match handle.extra {
@@ -116,7 +117,7 @@ fn connect(target: &mut Handle, new_id: usize) -> Result<()> {
     target.remote = Connection::Open(new_id);
     Ok(())
 }
-impl SchemeBlockMut for IpcScheme {
+impl SchemeBlockMut for ChanScheme {
     fn open(&mut self, path: &[u8], flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
         let path = ::std::str::from_utf8(path).or(Err(Error::new(EPERM)))?;
 
@@ -155,7 +156,7 @@ impl SchemeBlockMut for IpcScheme {
                 if let Connection::Open(remote_id) = remote {
                     let new_id = self.next_id;
 
-                    let mut clone = self.handles.get_mut(&id).map(Handle::accept).unwrap();
+                    let clone = self.handles.get_mut(&id).map(Handle::accept).unwrap();
 
                     {
                         // This might fail if the remote side closed early
@@ -174,7 +175,7 @@ impl SchemeBlockMut for IpcScheme {
                 }
             },
             b"connect" => {
-                let mut new = Handle::default();
+                let new = Handle::default();
                 let new_id = self.next_id;
 
                 {
@@ -217,7 +218,7 @@ impl SchemeBlockMut for IpcScheme {
             (handle.flags, handle.remote)
         };
         if let Connection::Open(remote_id) = remote {
-            let mut remote = self.handles.get_mut(&remote_id).unwrap();
+            let remote = self.handles.get_mut(&remote_id).unwrap();
             match remote.extra {
                 Extra::Client(ref mut client) => {
                     client.buffer.extend(buf);
@@ -247,7 +248,7 @@ impl SchemeBlockMut for IpcScheme {
         };
 
         if !client.buffer.is_empty() {
-            let len = buf.len().min(client.buffer.len());
+            let len = cmp::min(buf.len(), client.buffer.len());
             buf[..len].copy_from_slice(&client.buffer[..len]);
             client.buffer.drain(..len);
             Ok(Some(len))
