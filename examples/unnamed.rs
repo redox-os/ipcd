@@ -1,15 +1,15 @@
 use std::{
     fs::File,
     io::{self, prelude::*},
-    os::unix::io::{AsRawFd, FromRawFd}
+    os::unix::io::{AsRawFd, FromRawFd, RawFd}
 };
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
 }
 fn dup(file: &File, buf: &str) -> io::Result<File> {
-    let stream = syscall::dup(file.as_raw_fd(), buf.as_bytes()).map_err(from_syscall_error)?;
-    Ok(unsafe { File::from_raw_fd(stream) })
+    let stream = syscall::dup(file.as_raw_fd() as usize, buf.as_bytes()).map_err(from_syscall_error)?;
+    Ok(unsafe { File::from_raw_fd(stream as RawFd) })
 }
 
 fn main() -> io::Result<()> {

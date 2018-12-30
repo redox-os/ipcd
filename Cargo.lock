@@ -2,13 +2,13 @@
 name = "ipcd"
 version = "0.1.0"
 dependencies = [
- "redox_syscall 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "redox_syscall 0.1.49 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "redox_syscall"
-version = "0.1.40"
+version = "0.1.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [metadata]
-"checksum redox_syscall 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)" = "c214e91d3ecf43e9a4e41e578973adeb14b474f2bee858742d127af75a0112b1"
+"checksum redox_syscall 0.1.49 (registry+https://github.com/rust-lang/crates.io-index)" = "f22c50afdcf3f0a31ebb6b47697f6a7c5e5a24967e842858118bce0615f0afad"

@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{self, prelude::*},
-    os::unix::io::{AsRawFd, FromRawFd},
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
     thread,
     time::Duration
 };
@@ -10,13 +10,13 @@ fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
 }
 fn nonblock(file: &File) -> io::Result<()> {
-    syscall::fcntl(file.as_raw_fd(), syscall::F_SETFL, syscall::O_NONBLOCK)
+    syscall::fcntl(file.as_raw_fd() as usize, syscall::F_SETFL, syscall::O_NONBLOCK)
         .map(|_| ())
         .map_err(from_syscall_error)
 }
 fn dup(file: &File, buf: &str) -> io::Result<File> {
-    let stream = syscall::dup(file.as_raw_fd(), buf.as_bytes()).map_err(from_syscall_error)?;
-    Ok(unsafe { File::from_raw_fd(stream) })
+    let stream = syscall::dup(file.as_raw_fd() as usize, buf.as_bytes()).map_err(from_syscall_error)?;
+    Ok(unsafe { File::from_raw_fd(stream as RawFd) })
 }
 
 fn main() -> io::Result<()> {

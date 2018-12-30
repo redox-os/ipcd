@@ -14,7 +14,11 @@ fn main() -> Result<(), io::Error> {
     let file = File::open("shm:counter")?;
     println!("Reading from map... ");
     let counter = unsafe {
-        &mut *(syscall::fmap(file.as_raw_fd(), 0, mem::size_of::<usize>()).map_err(from_syscall_error)? as *mut usize)
+        &mut *(syscall::fmap(file.as_raw_fd() as usize, &syscall::Map {
+            offset: 0,
+            size: mem::size_of::<usize>(),
+            flags: syscall::PROT_READ | syscall::PROT_WRITE
+        }).map_err(from_syscall_error)? as *mut usize)
     };
     println!("Read value {}", counter);
     *counter += 1;

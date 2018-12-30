@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     rc::Rc
 };
-use syscall::{error::*, Error, SchemeMut, Result};
+use syscall::{error::*, Error, Map, SchemeMut, Result};
 
 #[derive(Default)]
 pub struct ShmHandle {
@@ -28,18 +28,19 @@ impl SchemeMut for ShmScheme {
         self.next_id += 1;
         Ok(id)
     }
-    fn fmap(&mut self, id: usize, offset: usize, len: usize) -> Result<usize> {
+    fn fmap(&mut self, id: usize, map: &Map) -> Result<usize> {
         let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let total_size = map.offset + map.size;
         match self.maps.get_mut(path).expect("handle pointing to nothing").buffer {
             Some(ref mut buf) => {
-                if offset + len != buf.len() {
+                if total_size != buf.len() {
                     return Err(Error::new(ERANGE));
                 }
-                Ok(buf[offset..].as_mut_ptr() as usize)
+                Ok(buf[map.offset..].as_mut_ptr() as usize)
             },
             ref mut buf @ None => {
-                *buf = Some(vec![0; offset+len].into_boxed_slice());
-                Ok(buf.as_mut().unwrap()[offset..].as_mut_ptr() as usize)
+                *buf = Some(vec![0; total_size].into_boxed_slice());
+                Ok(buf.as_mut().unwrap()[map.offset..].as_mut_ptr() as usize)
             }
         }
     }

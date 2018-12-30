@@ -14,13 +14,21 @@ fn main() -> Result<(), io::Error> {
 
     let one = unsafe {
         slice::from_raw_parts_mut(
-            syscall::fmap(file1.as_raw_fd(), 0, 128).map_err(from_syscall_error)? as *mut u8,
+            syscall::fmap(file1.as_raw_fd() as usize, &syscall::Map {
+                offset: 0,
+                size: 128,
+                flags: syscall::PROT_READ | syscall::PROT_WRITE
+            }).map_err(from_syscall_error)? as *mut u8,
             128
         )
     };
     let two = unsafe {
         slice::from_raw_parts_mut(
-            syscall::fmap(file2.as_raw_fd(), 64, 64).map_err(from_syscall_error)? as *mut u8,
+            syscall::fmap(file2.as_raw_fd() as usize, &syscall::Map {
+                offset: 64,
+                size: 64,
+                flags: syscall::PROT_READ | syscall::PROT_WRITE
+            }).map_err(from_syscall_error)? as *mut u8,
             64
         )
     };
@@ -35,7 +43,7 @@ fn main() -> Result<(), io::Error> {
 
     println!("Testing fpath");
     let mut buf = [0; 128];
-    let len = syscall::fpath(file1.as_raw_fd(), &mut buf).map_err(from_syscall_error)?;
+    let len = syscall::fpath(file1.as_raw_fd() as usize, &mut buf).map_err(from_syscall_error)?;
     assert_eq!(&buf[..len], b"shm:example");
     Ok(())
 }
