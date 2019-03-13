@@ -55,17 +55,51 @@ impl Handle {
             ..Default::default()
         }
     }
+
     pub fn require_listener(&self) -> Result<()> {
         match self.extra {
             Extra::Listener(_) => Ok(()),
             _ => Err(Error::new(EBADF))
         }
     }
+
     pub fn require_client(&self) -> Result<()> {
         match self.extra {
             Extra::Client(_) => Ok(()),
             _ => Err(Error::new(EBADF))
         }
+    }
+
+    pub fn events(&mut self) -> usize {
+        let mut events = 0;
+        match self.extra {
+            Extra::Listener(_) => {
+                if let Connection::Open(_) = self.remote {
+                    // Send writable because that's what smolnetd does for TcpListener
+                    if !self.notified_write {
+                        self.notified_write = true;
+                        events |= EVENT_WRITE;
+                    }
+                }
+            },
+            Extra::Client(ref mut client) => {
+                if let Connection::Open(_) = self.remote {
+                    if !self.notified_write {
+                        self.notified_write = true;
+                        events |= EVENT_WRITE;
+                    }
+                }
+                if !client.buffer.is_empty() || self.remote == Connection::Closed {
+                    if !self.notified_read {
+                        self.notified_read = true;
+                        events |= EVENT_READ;
+                    }
+                } else {
+                    self.notified_read = false;
+                }
+            }
+        }
+        events
     }
 }
 
@@ -78,32 +112,9 @@ pub struct ChanScheme {
 impl ChanScheme {
     pub fn post_fevents(&mut self, file: &mut File) -> io::Result<()> {
         for (id, handle) in &mut self.handles {
-            match handle.extra {
-                Extra::Listener(_) => {
-                    if let Connection::Open(_) = handle.remote {
-                        // Send writable because that's what smolnetd does for TcpListener
-                        if !handle.notified_write {
-                            handle.notified_write = true;
-                            post_fevent(file, *id, EVENT_WRITE)?;
-                        }
-                    }
-                },
-                Extra::Client(ref mut client) => {
-                    if let Connection::Open(_) = handle.remote {
-                        if !handle.notified_write {
-                            handle.notified_write = true;
-                            post_fevent(file, *id, EVENT_WRITE)?;
-                        }
-                    }
-                    if !client.buffer.is_empty() || handle.remote == Connection::Closed {
-                        if !handle.notified_read {
-                            handle.notified_read = true;
-                            post_fevent(file, *id, EVENT_READ)?;
-                        }
-                    } else {
-                        handle.notified_read = false;
-                    }
-                }
+            let events = handle.events();
+            if events > 0 {
+                post_fevent(file, *id, events)?;
             }
         }
         Ok(())
@@ -209,7 +220,8 @@ impl SchemeBlockMut for ChanScheme {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
         handle.notified_read = false;
         handle.notified_write = false;
-        Ok(Some(id))
+
+        Ok(Some(handle.events()))
     }
     fn write(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
         let (flags, remote) = {
