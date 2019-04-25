@@ -1,6 +1,8 @@
 use std::{
     cmp,
     collections::{HashMap, hash_map::Entry},
+    fs::File,
+    io,
     rc::Rc
 };
 use syscall::{error::*, Error, Map, SchemeMut, Result};
@@ -10,11 +12,21 @@ pub struct ShmHandle {
     buffer: Option<Box<[u8]>>,
     refs: usize
 }
-#[derive(Default)]
 pub struct ShmScheme {
     maps: HashMap<Rc<str>, ShmHandle>,
     handles: HashMap<usize, Rc<str>>,
-    next_id: usize
+    next_id: usize,
+    pub socket: File
+}
+impl ShmScheme {
+    pub fn new() -> io::Result<Self> {
+        Ok(Self {
+            maps: HashMap::new(),
+            handles: HashMap::new(),
+            next_id: 0,
+            socket: File::create(":shm")?
+        })
+    }
 }
 
 impl SchemeMut for ShmScheme {

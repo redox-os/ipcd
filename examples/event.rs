@@ -68,7 +68,7 @@ fn main() -> io::Result<()> {
 
     event_file.read(&mut event)?;
     assert_eq!(event.data, TOKEN_SERVER);
-    assert_eq!(event.flags, syscall::EVENT_WRITE);
+    assert_eq!(event.flags, syscall::EVENT_WRITE | syscall::EVENT_READ);
     println!("-> Accept event");
 
     println!("Testing write events...");

@@ -4,7 +4,7 @@ use std::{
     io::{self, prelude::*},
     os::unix::io::AsRawFd
 };
-use syscall::{flag::*, Event, Packet, SchemeBlockMut, SchemeMut};
+use syscall::{flag::*, error, Error, Event, Packet, SchemeBlockMut, SchemeMut};
 
 mod chan;
 mod shm;
@@ -19,7 +19,7 @@ fn from_syscall_error(error: syscall::Error) -> io::Error {
 const TOKEN_CHAN: usize = 0;
 const TOKEN_SHM: usize = 1;
 
-fn main() -> Result<(), Box<dyn ::std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     if unsafe { syscall::clone(0) }.map_err(from_syscall_error)? != 0 {
         return Ok(());
     }
@@ -27,22 +27,19 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     // Create event listener for both files
     let mut event_file = File::open("event:")?;
 
-    let mut chan_file = File::create(":chan")?;
+    let mut chan = ChanScheme::new()?;
     event_file.write(&Event {
-        id: chan_file.as_raw_fd() as usize,
+        id: chan.socket.as_raw_fd() as usize,
         flags: EVENT_READ,
         data: TOKEN_CHAN
     })?;
-
-    let mut shm_file = File::create(":shm")?;
+    let mut shm = ShmScheme::new()?;
     event_file.write(&Event {
-        id: shm_file.as_raw_fd() as usize,
+        id: shm.socket.as_raw_fd() as usize,
         flags: EVENT_READ,
         data: TOKEN_SHM
     })?;
 
-    let mut chan = ChanScheme::default();
-    let mut shm = ShmScheme::default();
     let mut todo = VecDeque::with_capacity(16);
 
     syscall::setrens(0, 0).map_err(from_syscall_error)?;
@@ -54,7 +51,7 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
         match event.data {
             TOKEN_CHAN => {
                 let mut packet = Packet::default();
-                chan_file.read(&mut packet)?;
+                chan.socket.read(&mut packet)?;
 
                 // Put new packet first in the queue
                 todo.push_front(packet);
@@ -67,7 +64,7 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
                         // Send packet back with new ID
                         let mut packet = *packet;
                         packet.a = status;
-                        if let Err(err) = chan_file.write(&packet) {
+                        if let Err(err) = chan.socket.write(&packet) {
                             error = Some(err);
                         }
                         return false;
@@ -79,24 +76,21 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
                 if let Some(err) = error {
                     return Err(Box::new(err));
                 }
-
-                // Handle fevents
-                chan.post_fevents(&mut chan_file)?;
             },
             TOKEN_SHM => {
                 let mut packet = Packet::default();
-                shm_file.read(&mut packet)?;
+                shm.socket.read(&mut packet)?;
 
                 // Handle packet and update `a` to be status code
                 shm.handle(&mut packet);
 
-                shm_file.write(&packet)?;
+                shm.socket.write(&packet)?;
             },
             _ => ()
         }
     }
 }
-fn post_fevent(file: &mut File, id: usize, flag: usize) -> io::Result<()> {
+fn post_fevent(file: &mut File, id: usize, flag: usize) -> syscall::Result<()> {
     file.write(&syscall::Packet {
         a: syscall::SYS_FEVENT,
         b: id,
@@ -104,5 +98,6 @@ fn post_fevent(file: &mut File, id: usize, flag: usize) -> io::Result<()> {
         d: 1,
         ..Default::default()
     })
-    .map(|_| ())
+        .map(|_| ())
+        .map_err(|_| Error::new(error::EIO))
 }
