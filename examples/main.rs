@@ -1,5 +1,5 @@
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, prelude::*},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
     thread,
@@ -23,11 +23,24 @@ fn main() -> io::Result<()> {
     let mut buf = [0; 5];
     let server = File::create("chan:hello_world")?;
     {
-        let mut client = File::open("chan:hello_world")?;
-        // First client not accepted yet
-        assert_eq!(File::open("chan:hello_world").unwrap_err().kind(), io::ErrorKind::ConnectionRefused);
+        println!("Testing O_EXCL...");
+        assert_eq!(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open("chan:hello_world").unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+
+        println!("Testing connecting...");
+
+        File::open("chan:hello_world")?; // closed connection will silently be skipped
+        let mut client = File::create("chan:hello_world")?; // O_CREAT without O_EXCL does nothing
+        let tmp = File::open("chan:hello_world")?; // multiple connections are handled
 
         let mut stream = dup(&server, "listen")?;
+        assert!(dup(&server, "listen").is_ok());
+        drop(tmp);
 
         println!("Testing basic I/O...");
 
@@ -88,9 +101,6 @@ fn main() -> io::Result<()> {
         assert_eq!(client.write(b"a").unwrap_err().kind(), io::ErrorKind::WouldBlock);
         println!("-> Write before accept would block");
     }
-
-    assert_eq!(dup(&server, "listen").unwrap_err().kind(), io::ErrorKind::ConnectionReset);
-    println!("-> Server can't accept dropped client");
 
     let mut client = dup(&server, "connect")?;
     nonblock(&client)?;
