@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut chan_opt = Some(chan);
     let mut shm_opt = Some(shm);
-    while chan_opt.is_some() && shm_opt.is_some() {
+    while chan_opt.is_some() || shm_opt.is_some() {
         let mut event = Event::default();
         event_file.read(&mut event)?;
 
