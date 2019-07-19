@@ -27,13 +27,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create event listener for both files
     let mut event_file = File::open("event:")?;
 
-    let mut chan = ChanScheme::new()?;
+    let chan = ChanScheme::new()?;
     event_file.write(&Event {
         id: chan.socket.as_raw_fd() as usize,
         flags: EVENT_READ,
         data: TOKEN_CHAN
     })?;
-    let mut shm = ShmScheme::new()?;
+    let shm = ShmScheme::new()?;
     event_file.write(&Event {
         id: shm.socket.as_raw_fd() as usize,
         flags: EVENT_READ,
@@ -44,51 +44,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     syscall::setrens(0, 0).map_err(from_syscall_error)?;
 
-    loop {
+    let mut chan_opt = Some(chan);
+    let mut shm_opt = Some(shm);
+    while chan_opt.is_some() && shm_opt.is_some() {
         let mut event = Event::default();
         event_file.read(&mut event)?;
 
         match event.data {
             TOKEN_CHAN => {
-                let mut packet = Packet::default();
-                chan.socket.read(&mut packet)?;
-
-                // Put new packet first in the queue
-                todo.push_front(packet);
-
                 let mut error: Option<io::Error> = None;
 
-                // Process queue, delete finished items
-                todo.retain(|packet| {
-                    if let Some(status) = chan.handle(&packet) {
-                        // Send packet back with new ID
-                        let mut packet = *packet;
-                        packet.a = status;
-                        if let Err(err) = chan.socket.write(&packet) {
-                            error = Some(err);
-                        }
-                        return false;
-                    }
+                let unmount = if let Some(ref mut chan) = chan_opt {
+                    let eof = loop {
+                        let mut packet = Packet::default();
+                        match chan.socket.read(&mut packet) {
+                            Ok(0) => break true,
+                            Ok(_) => todo.push_front(packet),
+                            Err(err) => if err.kind() == io::ErrorKind::WouldBlock {
+                                break false;
+                            } else {
+                                return Err(Box::new(err));
+                            }
+                        };
+                    };
 
-                    true
-                });
+                    // Process queue, delete finished items
+                    todo.retain(|packet| {
+                        if let Some(status) = chan.handle(&packet) {
+                            // Send packet back with new ID
+                            let mut packet = *packet;
+                            packet.a = status;
+                            if let Err(err) = chan.socket.write(&packet) {
+                                error = Some(err);
+                            }
+                            return false;
+                        }
+
+                        true
+                    });
+
+                    eof
+                } else {
+                    false
+                };
+
+                if unmount {
+                    if let Some(mut chan) = chan_opt.take() {
+                        for mut packet in todo.drain(..) {
+                            packet.a = Error::mux(Err(Error::new(error::ENODEV)));
+                            if let Err(err) = chan.socket.write(&packet) {
+                                error = Some(err);
+                            }
+                        }
+                    }
+                }
 
                 if let Some(err) = error {
                     return Err(Box::new(err));
                 }
             },
             TOKEN_SHM => {
-                let mut packet = Packet::default();
-                shm.socket.read(&mut packet)?;
+                let unmount = if let Some(ref mut shm) = shm_opt {
+                    let eof = loop {
+                        let mut packet = Packet::default();
+                        match shm.socket.read(&mut packet) {
+                            Ok(0) => break true,
+                            Ok(_) => {
+                                shm.handle(&mut packet);
+                                shm.socket.write(&packet)?;
+                            },
+                            Err(err) => if err.kind() == io::ErrorKind::WouldBlock {
+                                break false;
+                            } else {
+                                return Err(Box::new(err));
+                            }
+                        };
+                    };
 
-                // Handle packet and update `a` to be status code
-                shm.handle(&mut packet);
+                    eof
+                } else {
+                    false
+                };
 
-                shm.socket.write(&packet)?;
+                if unmount {
+                    shm_opt.take();
+                }
             },
             _ => ()
         }
     }
+
+    Ok(())
 }
 fn post_fevent(file: &mut File, id: usize, flag: usize) -> syscall::Result<()> {
     file.write(&syscall::Packet {
