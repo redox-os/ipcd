@@ -1,11 +1,12 @@
 use std::{
     cmp,
     collections::{HashMap, hash_map::Entry},
-    fs::File,
+    fs::{File, OpenOptions},
     io,
-    rc::Rc
+    os::unix::fs::OpenOptionsExt,
+    rc::Rc,
 };
-use syscall::{error::*, Error, Map, SchemeMut, Result};
+use syscall::{error::*, flag::O_NONBLOCK, Error, Map, SchemeMut, Result};
 
 #[derive(Default)]
 pub struct ShmHandle {
@@ -24,7 +25,12 @@ impl ShmScheme {
             maps: HashMap::new(),
             handles: HashMap::new(),
             next_id: 0,
-            socket: File::create(":shm")?
+            socket: OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .custom_flags(O_NONBLOCK as i32)
+                .open(":shm")?
         })
     }
 }

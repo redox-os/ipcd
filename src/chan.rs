@@ -2,8 +2,9 @@ use crate::post_fevent;
 use std::{
     cmp,
     collections::{HashMap, VecDeque},
-    fs::File,
-    io
+    fs::{File, OpenOptions},
+    io,
+    os::unix::fs::OpenOptionsExt,
 };
 use syscall::{flag::*, error::*, Error, SchemeBlockMut, Result};
 
@@ -102,7 +103,12 @@ impl ChanScheme {
             handles: HashMap::new(),
             listeners: HashMap::new(),
             next_id: 0,
-            socket: File::create(":chan")?
+            socket: OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .custom_flags(O_NONBLOCK as i32)
+                .open(":chan")?
         })
     }
 }
