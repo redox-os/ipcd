@@ -48,7 +48,8 @@ pub struct NullFile {
 pub struct Handle {
     id: usize,
     flags: usize,
-    extra: Extra
+    extra: Extra,
+    path: Option<String>,
 }
 impl Handle {
     /// Duplicate this listener handle into one that is linked to the
@@ -186,10 +187,11 @@ impl SchemeBlockMut for ChanScheme {
                 loop {
                     let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
                     let listener = handle.require_listener()?;
+                    let listener_path = listener.path.clone();
 
                     break if let Some(remote_id) = listener.awaiting.pop_front() {
                         let new_id = self.next_id;
-                        let new = handle.accept(remote_id);
+                        let mut new = handle.accept(remote_id);
 
                         // Hook the remote side, assuming it's still
                         // connected, up to this one so the connection is
@@ -205,6 +207,8 @@ impl SchemeBlockMut for ChanScheme {
                             Extra::Listener(_) => panic!("newly created handle can't possibly be a listener")
                         }
                         post_fevent(&mut self.socket, remote_id, EVENT_WRITE)?;
+
+                        new.path = listener_path;
 
                         self.handles.insert(new_id, new);
                         self.next_id += 1;
@@ -270,6 +274,23 @@ impl SchemeBlockMut for ChanScheme {
         } else {
             Ok(None)
         }
+    }
+    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
+        // Write scheme name
+        const PREFIX: &[u8] = b"chan:";
+        let len = cmp::min(PREFIX.len(), buf.len());
+        buf[..len].copy_from_slice(&PREFIX[..len]);
+        if len < PREFIX.len() {
+            return Ok(Some(len));
+        }
+
+        // Write path
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = handle.path.as_ref().ok_or(Error::new(EBADF))?;
+        let len = cmp::min(path.len(), buf.len() - PREFIX.len());
+        buf[PREFIX.len()..][..len].copy_from_slice(&path.as_bytes()[..len]);
+
+        Ok(Some(PREFIX.len() + len))
     }
     fn fsync(&mut self, id: usize) -> Result<Option<usize>> {
         self.handles.get(&id)
