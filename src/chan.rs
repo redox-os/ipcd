@@ -40,11 +40,16 @@ impl Default for Connection {
     }
 }
 
+pub struct NullFile {
+    pub flags: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct Handle {
     id: usize,
     flags: usize,
-    extra: Extra
+    extra: Extra,
+    path: Option<String>,
 }
 impl Handle {
     /// Duplicate this listener handle into one that is linked to the
@@ -92,6 +97,7 @@ impl Handle {
 }
 
 pub struct ChanScheme {
+    nulls: HashMap<usize, NullFile>,
     handles: HashMap<usize, Handle>,
     listeners: HashMap<String, usize>,
     next_id: usize,
@@ -100,6 +106,7 @@ pub struct ChanScheme {
 impl ChanScheme {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
+            nulls: HashMap::new(),
             handles: HashMap::new(),
             listeners: HashMap::new(),
             next_id: 0,
@@ -124,6 +131,20 @@ impl SchemeBlockMut for ChanScheme {
         let path = ::std::str::from_utf8(path).or(Err(Error::new(EPERM)))?;
 
         let new_id = self.next_id;
+
+        if path.is_empty() {
+            let null = NullFile {
+                flags: flags,
+            };
+
+            let id = new_id;
+
+            self.nulls.insert(id, null);
+            self.next_id += 1;
+
+            return Ok(Some(id));
+        }
+
         let mut new = Handle::default();
         new.flags = flags;
 
@@ -154,15 +175,23 @@ impl SchemeBlockMut for ChanScheme {
         Ok(Some(new_id))
     }
     fn dup(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
+        if let Some(flags) = self.nulls
+            .get(&id)
+            .map(|null| null.flags)
+        {
+            return self.open(buf, flags, 0, 0);
+        }
+
         match buf {
             b"listen" => {
                 loop {
                     let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
                     let listener = handle.require_listener()?;
+                    let listener_path = listener.path.clone();
 
                     break if let Some(remote_id) = listener.awaiting.pop_front() {
                         let new_id = self.next_id;
-                        let new = handle.accept(remote_id);
+                        let mut new = handle.accept(remote_id);
 
                         // Hook the remote side, assuming it's still
                         // connected, up to this one so the connection is
@@ -178,6 +207,8 @@ impl SchemeBlockMut for ChanScheme {
                             Extra::Listener(_) => panic!("newly created handle can't possibly be a listener")
                         }
                         post_fevent(&mut self.socket, remote_id, EVENT_WRITE)?;
+
+                        new.path = listener_path;
 
                         self.handles.insert(new_id, new);
                         self.next_id += 1;
@@ -244,6 +275,23 @@ impl SchemeBlockMut for ChanScheme {
             Ok(None)
         }
     }
+    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
+        // Write scheme name
+        const PREFIX: &[u8] = b"chan:";
+        let len = cmp::min(PREFIX.len(), buf.len());
+        buf[..len].copy_from_slice(&PREFIX[..len]);
+        if len < PREFIX.len() {
+            return Ok(Some(len));
+        }
+
+        // Write path
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = handle.path.as_ref().ok_or(Error::new(EBADF))?;
+        let len = cmp::min(path.len(), buf.len() - PREFIX.len());
+        buf[PREFIX.len()..][..len].copy_from_slice(&path.as_bytes()[..len]);
+
+        Ok(Some(PREFIX.len() + len))
+    }
     fn fsync(&mut self, id: usize) -> Result<Option<usize>> {
         self.handles.get(&id)
             .ok_or(Error::new(EBADF))
@@ -268,6 +316,10 @@ impl SchemeBlockMut for ChanScheme {
         }
     }
     fn close(&mut self, id: usize) -> Result<Option<usize>> {
+        if let Some(_null) = self.nulls.remove(&id) {
+            return Ok(Some(0));
+        }
+
         let handle = self.handles.remove(&id).ok_or(Error::new(EBADF))?;
 
         match handle.extra {
