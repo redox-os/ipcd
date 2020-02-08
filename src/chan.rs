@@ -40,10 +40,6 @@ impl Default for Connection {
     }
 }
 
-pub struct NullFile {
-    pub flags: usize,
-}
-
 #[derive(Debug, Default)]
 pub struct Handle {
     id: usize,
@@ -97,7 +93,6 @@ impl Handle {
 }
 
 pub struct ChanScheme {
-    nulls: HashMap<usize, NullFile>,
     handles: HashMap<usize, Handle>,
     listeners: HashMap<String, usize>,
     next_id: usize,
@@ -106,7 +101,6 @@ pub struct ChanScheme {
 impl ChanScheme {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
-            nulls: HashMap::new(),
             handles: HashMap::new(),
             listeners: HashMap::new(),
             next_id: 0,
@@ -131,20 +125,6 @@ impl SchemeBlockMut for ChanScheme {
         let path = ::std::str::from_utf8(path).or(Err(Error::new(EPERM)))?;
 
         let new_id = self.next_id;
-
-        if path.is_empty() {
-            let null = NullFile {
-                flags: flags,
-            };
-
-            let id = new_id;
-
-            self.nulls.insert(id, null);
-            self.next_id += 1;
-
-            return Ok(Some(id));
-        }
-
         let mut new = Handle::default();
         new.flags = flags;
 
@@ -175,13 +155,6 @@ impl SchemeBlockMut for ChanScheme {
         Ok(Some(new_id))
     }
     fn dup(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
-        if let Some(flags) = self.nulls
-            .get(&id)
-            .map(|null| null.flags)
-        {
-            return self.open(buf, flags, 0, 0);
-        }
-
         match buf {
             b"listen" => {
                 loop {
@@ -238,7 +211,20 @@ impl SchemeBlockMut for ChanScheme {
                 Ok(Some(new_id))
             },
             _ => {
-                return Err(Error::new(EBADF));
+                // If a buf is provided, different than "connect" / "listen",
+                // turn the socket into a named socket.
+
+                if buf == b"" {
+                    return Err(Error::new(EBADF));
+                }
+
+                let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+                if handle.path.is_some() {
+                    return Err(Error::new(EBADF));
+                }
+
+                let flags = handle.flags;
+                return self.open(buf, flags, 0, 0);
             }
         }
     }
@@ -316,10 +302,6 @@ impl SchemeBlockMut for ChanScheme {
         }
     }
     fn close(&mut self, id: usize) -> Result<Option<usize>> {
-        if let Some(_null) = self.nulls.remove(&id) {
-            return Ok(Some(0));
-        }
-
         let handle = self.handles.remove(&id).ok_or(Error::new(EBADF))?;
 
         match handle.extra {
