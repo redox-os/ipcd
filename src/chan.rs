@@ -211,7 +211,20 @@ impl SchemeBlockMut for ChanScheme {
                 Ok(Some(new_id))
             },
             _ => {
-                return Err(Error::new(EBADF));
+                // If a buf is provided, different than "connect" / "listen",
+                // turn the socket into a named socket.
+
+                if buf == b"" {
+                    return Err(Error::new(EBADF));
+                }
+
+                let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+                if handle.path.is_some() {
+                    return Err(Error::new(EBADF));
+                }
+
+                let flags = handle.flags;
+                return self.open(buf, flags, 0, 0);
             }
         }
     }
