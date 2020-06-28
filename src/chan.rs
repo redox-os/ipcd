@@ -140,6 +140,8 @@ impl SchemeBlockMut for ChanScheme {
         } else if create && flags & O_EXCL == O_EXCL {
             return Err(Error::new(EEXIST));
         } else {
+            // Connect to existing if: O_CREAT isn't set or it already exists
+            // and O_EXCL isn't set
             let listener_id = *self.listeners.get(path).ok_or(Error::new(ENOENT))?;
             let listener = self.handles.get_mut(&listener_id).expect("orphan listener left over");
             listener.connect(new_id)?;
@@ -214,7 +216,7 @@ impl SchemeBlockMut for ChanScheme {
                 // If a buf is provided, different than "connect" / "listen",
                 // turn the socket into a named socket.
 
-                if buf == b"" {
+                if buf.is_empty() {
                     return Err(Error::new(EBADF));
                 }
 
