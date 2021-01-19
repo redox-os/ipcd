@@ -347,9 +347,9 @@ impl SchemeBlockMut for ChanScheme {
             _ => Err(Error::new(EINVAL))
         }
     }
-    fn fevent(&mut self, id: usize, _flags: usize) -> Result<Option<usize>> {
+    fn fevent(&mut self, id: usize, _flags: EventFlags) -> Result<Option<EventFlags>> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
-        let mut events = 0;
+        let mut events = EventFlags::empty();
         match handle.extra {
             Extra::Client(ref client) => {
                 if let Connection::Open(_) = client.remote {

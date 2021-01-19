@@ -20,7 +20,7 @@ const TOKEN_CHAN: usize = 0;
 const TOKEN_SHM: usize = 1;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if unsafe { syscall::clone(0) }.map_err(from_syscall_error)? != 0 {
+    if unsafe { syscall::clone(CloneFlags::empty()) }.map_err(from_syscall_error)? != 0 {
         return Ok(());
     }
 
@@ -136,11 +136,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-fn post_fevent(file: &mut File, id: usize, flag: usize) -> syscall::Result<()> {
+fn post_fevent(file: &mut File, id: usize, flag: EventFlags) -> syscall::Result<()> {
     file.write(&syscall::Packet {
         a: syscall::SYS_FEVENT,
         b: id,
-        c: flag,
+        c: flag.bits(),
         d: 1,
         ..Default::default()
     })
