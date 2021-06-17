@@ -121,9 +121,7 @@ impl SchemeBlockMut for ChanScheme {
     // | |_| |  __/| |___| |\  |
     //  \___/|_|   |_____|_| \_|
 
-    fn open(&mut self, path: &[u8], flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
-        let path = ::std::str::from_utf8(path).or(Err(Error::new(EPERM)))?;
-
+    fn open(&mut self, path: &str, flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
         let new_id = self.next_id;
         let mut new = Handle::default();
         new.flags = flags;
@@ -220,13 +218,15 @@ impl SchemeBlockMut for ChanScheme {
                     return Err(Error::new(EBADF));
                 }
 
+                let path = core::str::from_utf8(buf).map_err(|_| Error::new(EBADF))?;
+
                 let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
                 if handle.path.is_some() {
                     return Err(Error::new(EBADF));
                 }
 
                 let flags = handle.flags;
-                return self.open(buf, flags, 0, 0);
+                return self.open(path, flags, 0, 0);
             }
         }
     }

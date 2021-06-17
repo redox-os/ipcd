@@ -36,8 +36,8 @@ impl ShmScheme {
 }
 
 impl SchemeMut for ShmScheme {
-    fn open(&mut self, path: &[u8], _flags: usize, _uid: u32, _gid: u32) -> Result<usize> {
-        let path = std::str::from_utf8(path).or(Err(Error::new(EPERM)))?.into();
+    fn open(&mut self, path: &str, _flags: usize, _uid: u32, _gid: u32) -> Result<usize> {
+        let path = Rc::from(path);
         let entry = self.maps.entry(Rc::clone(&path)).or_insert(ShmHandle::default());
         entry.refs += 1;
         self.handles.insert(self.next_id, path);
