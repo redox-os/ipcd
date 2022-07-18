@@ -3,4 +3,5 @@ edition = "2018"
 name = "ipcd"
 version = "0.1.0"
 [dependencies]
-redox_syscall = "0.2.12"
+libc = "0.2"
+redox_syscall = "0.2"

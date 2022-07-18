@@ -20,8 +20,10 @@ const TOKEN_CHAN: usize = 0;
 const TOKEN_SHM: usize = 1;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if unsafe { syscall::clone(CloneFlags::empty()) }.map_err(from_syscall_error)? != 0 {
-        return Ok(());
+    match unsafe { libc::fork() } {
+        0 => (),
+        -1 => return Err(Box::new(io::Error::last_os_error())),
+        _child => return Ok(()),
     }
 
     // Create event listener for both files
