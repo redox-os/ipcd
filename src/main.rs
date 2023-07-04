@@ -112,7 +112,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match shm.socket.read(&mut packet) {
                             Ok(0) => break true,
                             Ok(_) => {
-                                shm.handle(&mut packet);
+                                unsafe {
+                                    shm.do_handle(&mut packet);
+                                }
                                 shm.socket.write(&packet)?;
                             },
                             Err(err) => if err.kind() == io::ErrorKind::WouldBlock {
