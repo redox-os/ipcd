@@ -33,41 +33,6 @@ impl ShmScheme {
                 .open(":shm")?
         })
     }
-    pub unsafe fn do_handle(&mut self, packet: &mut Packet) {
-        match packet.a {
-            KSMSG_MMAP_PREP | KSMSG_MMAP => {
-                let req_file = packet.b;
-                let req_flags = MapFlags::from_bits_truncate(packet.c);
-                let req_page_count = packet.d;
-                let req_offset = u64::from(packet.uid) | (u64::from(packet.gid) << 32);
-
-                let res = self.ksmsg_mmap(req_file, req_flags, req_offset, req_page_count);
-
-                *packet = Packet {
-                    id: packet.id,
-                    a: syscall::Error::mux(res),
-                    ..Packet::default()
-                };
-            }
-            _ => self.handle(packet),
-        }
-    }
-    pub fn ksmsg_mmap(&mut self, id: usize, _flags: MapFlags, offset: u64, page_count: usize) -> Result<usize> {
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
-        let total_size = offset as usize + page_count * PAGE_SIZE;
-        match self.maps.get_mut(path).expect("handle pointing to nothing").buffer {
-            Some(ref mut buf) => {
-                if total_size > buf.len() {
-                    return Err(Error::new(ERANGE));
-                }
-                Ok(buf.as_ptr() + offset as usize)
-            },
-            ref mut buf @ None => {
-                *buf = Some(MmapGuard::alloc(page_count)?);
-                Ok(buf.as_mut().unwrap().as_ptr() + offset as usize)
-            }
-        }
-    }
 }
 
 impl SchemeMut for ShmScheme {
@@ -109,6 +74,22 @@ impl SchemeMut for ShmScheme {
             entry.remove_entry();
         }
         Ok(0)
+    }
+    fn mmap_prep(&mut self, id: usize, offset: u64, size: usize, flags: MapFlags) -> Result<usize> {
+        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let total_size = offset as usize + size;
+        match self.maps.get_mut(path).expect("handle pointing to nothing").buffer {
+            Some(ref mut buf) => {
+                if total_size > buf.len() {
+                    return Err(Error::new(ERANGE));
+                }
+                Ok(buf.as_ptr() + offset as usize)
+            },
+            ref mut buf @ None => {
+                *buf = Some(MmapGuard::alloc(size.div_ceil(PAGE_SIZE))?);
+                Ok(buf.as_mut().unwrap().as_ptr() + offset as usize)
+            }
+        }
     }
 }
 

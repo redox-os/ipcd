@@ -4,4 +4,4 @@ name = "ipcd"
 version = "0.1.0"
 [dependencies]
 libc = "0.2"
-redox_syscall = { path = "../../kernel/source/syscall" }
+redox_syscall = { git = "https://gitlab.redox-os.org/4lDO2/syscall.git", branch = "better_fmap" }
