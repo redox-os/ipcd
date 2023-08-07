@@ -1,3 +1,5 @@
+#![feature(int_roundings)]
+
 use std::{
     collections::VecDeque,
     fs::File,
@@ -112,7 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match shm.socket.read(&mut packet) {
                             Ok(0) => break true,
                             Ok(_) => {
-                                shm.handle(&mut packet);
+                                unsafe {
+                                    shm.handle(&mut packet);
+                                }
                                 shm.socket.write(&packet)?;
                             },
                             Err(err) => if err.kind() == io::ErrorKind::WouldBlock {
