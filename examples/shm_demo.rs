@@ -16,15 +16,15 @@ fn main() -> Result<(), io::Error> {
     let counter = unsafe {
         &mut *(syscall::fmap(file.as_raw_fd() as usize, &syscall::Map {
             offset: 0,
+            address: 0,
             size: mem::size_of::<usize>(),
-            flags: syscall::PROT_READ | syscall::PROT_WRITE
+            flags: syscall::PROT_READ | syscall::PROT_WRITE | syscall::MAP_SHARED,
         }).map_err(from_syscall_error)? as *mut usize)
     };
     println!("Read value {}", counter);
     *counter += 1;
     println!("Increased value to {}", counter);
 
-    loop {
-        thread::sleep(Duration::from_secs(std::u64::MAX));
-    }
+    thread::sleep(Duration::from_secs(1));
+    Ok(())
 }

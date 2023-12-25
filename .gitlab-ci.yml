@@ -22,4 +22,5 @@ test:redox:
           event
           main
           unnamed
-        #TODO: shm
+          shm_demo
+        # FIXME: shm is currently broken

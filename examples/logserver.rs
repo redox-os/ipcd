@@ -31,7 +31,7 @@ fn main() -> io::Result<()> {
         event_file.read(&mut event)?;
 
         if event.data == 0 {
-            println!("Listener recevied flags: {}", event.flags);
+            println!("Listener recevied flags: {:?}", event.flags);
             if event.flags & syscall::EVENT_WRITE == syscall::EVENT_WRITE {
                 loop {
                     let stream = match syscall::dup(server.as_raw_fd() as usize, b"listen").map_err(from_syscall_error) {
@@ -52,7 +52,7 @@ fn main() -> io::Result<()> {
                 }
             }
         } else {
-            println!("Client #{} received flags: {}", event.data, event.flags);
+            println!("Client #{} received flags: {:?}", event.data, event.flags);
             let client = clients.get_mut(&event.data).unwrap();
 
             if event.flags & syscall::EVENT_READ == syscall::EVENT_READ {
