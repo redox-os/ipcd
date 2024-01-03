@@ -1,12 +1,9 @@
-#![feature(int_roundings)]
+#![feature(int_roundings, let_chains)]
 
-use std::{
-    collections::VecDeque,
-    fs::File,
-    io::{self, prelude::*},
-    os::unix::io::AsRawFd
-};
-use syscall::{flag::*, error, Error, Event, Packet, SchemeBlockMut, SchemeMut};
+use std::collections::VecDeque;
+use event::{EventQueue, EventFlags};
+use redox_scheme::{SignalBehavior, Response};
+use syscall::{Error, Result, EAGAIN, EWOULDBLOCK, ENODEV};
 
 mod chan;
 mod shm;
@@ -14,77 +11,76 @@ mod shm;
 use self::chan::ChanScheme;
 use self::shm::ShmScheme;
 
-fn from_syscall_error(error: syscall::Error) -> io::Error {
-    io::Error::from_raw_os_error(error.errno as i32)
+fn main() {
+    redox_daemon::Daemon::new(move |daemon| {
+        // TODO: Better error handling
+        match inner(daemon) {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                println!("ipcd failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }).expect("ipcd: failed to daemonize");
 }
 
-const TOKEN_CHAN: usize = 0;
-const TOKEN_SHM: usize = 1;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    match unsafe { libc::fork() } {
-        0 => (),
-        -1 => return Err(Box::new(io::Error::last_os_error())),
-        _child => return Ok(()),
+fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
+    event::user_data! {
+        enum EventSource {
+            ChanSocket,
+            ShmSocket,
+        }
     }
+    let chan = ChanScheme::new()?;
+    let shm = ShmScheme::new()?;
+    daemon.ready().unwrap();
 
     // Create event listener for both files
-    let mut event_file = File::open("event:")?;
+    let mut event_queue = EventQueue::<EventSource>::new()?;
 
-    let chan = ChanScheme::new()?;
-    event_file.write(&Event {
-        id: chan.socket.as_raw_fd() as usize,
-        flags: EVENT_READ,
-        data: TOKEN_CHAN
-    })?;
-    let shm = ShmScheme::new()?;
-    event_file.write(&Event {
-        id: shm.socket.as_raw_fd() as usize,
-        flags: EVENT_READ,
-        data: TOKEN_SHM
-    })?;
+    event_queue.subscribe(chan.socket.inner().raw(), EventSource::ChanSocket, EventFlags::READ)?;
+    event_queue.subscribe(shm.socket.inner().raw(), EventSource::ShmSocket, EventFlags::READ)?;
 
     let mut todo = VecDeque::with_capacity(16);
 
-    syscall::setrens(0, 0).map_err(from_syscall_error)?;
+    libredox::call::setrens(0, 0)?;
 
     let mut chan_opt = Some(chan);
     let mut shm_opt = Some(shm);
     while chan_opt.is_some() || shm_opt.is_some() {
-        let mut event = Event::default();
-        event_file.read(&mut event)?;
+        let Some(event_res) = event_queue.next() else {
+            break;
+        };
+        let event = event_res?;
 
-        match event.data {
-            TOKEN_CHAN => {
-                let mut error: Option<io::Error> = None;
+        match event.user_data {
+            EventSource::ChanSocket => {
+                let mut error: Option<Error> = None;
 
                 let unmount = if let Some(ref mut chan) = chan_opt {
                     let eof = loop {
-                        let mut packet = Packet::default();
-                        match chan.socket.read(&mut packet) {
-                            Ok(0) => break true,
-                            Ok(_) => todo.push_front(packet),
-                            Err(err) => if err.kind() == io::ErrorKind::WouldBlock {
-                                break false;
-                            } else {
-                                return Err(Box::new(err));
-                            }
-                        };
+                        match chan.socket.next_request(SignalBehavior::Restart) {
+                            Ok(None) => break true,
+                            Ok(Some(request)) => todo.push_front(Some(request)),
+                            Err(Error { errno: EAGAIN | EWOULDBLOCK }) => break false,
+                            Err(error) => return Err(error),
+                        }
                     };
 
                     // Process queue, delete finished items
-                    todo.retain(|packet| {
-                        if let Some(status) = chan.handle(&packet) {
-                            // Send packet back with new ID
-                            let mut packet = *packet;
-                            packet.a = status;
-                            if let Err(err) = chan.socket.write(&packet) {
-                                error = Some(err);
+                    todo.retain_mut(|request_opt| {
+                        match request_opt.take().unwrap().handle_scheme_block_mut(chan) {
+                            Ok(res) => {
+                                if let Err(err) = chan.socket.write_response(res, SignalBehavior::Restart) {
+                                    error = Some(err);
+                                }
+                                return false;
                             }
-                            return false;
+                            Err(req) => {
+                                *request_opt = Some(req);
+                                true
+                            }
                         }
-
-                        true
                     });
 
                     eof
@@ -92,38 +88,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     false
                 };
 
-                if unmount {
-                    if let Some(mut chan) = chan_opt.take() {
-                        for mut packet in todo.drain(..) {
-                            packet.a = Error::mux(Err(Error::new(error::ENODEV)));
-                            if let Err(err) = chan.socket.write(&packet) {
-                                error = Some(err);
-                            }
+                if unmount && let Some(chan) = chan_opt.take() {
+                    for req in todo.drain(..) {
+                        if let Err(err) = chan.socket.write_response(Response::new(&req.unwrap(), Err(Error::new(ENODEV))), SignalBehavior::Restart) {
+                            error = Some(err);
                         }
                     }
                 }
 
                 if let Some(err) = error {
-                    return Err(Box::new(err));
+                    return Err(err);
                 }
             },
-            TOKEN_SHM => {
+            EventSource::ShmSocket => {
                 let unmount = if let Some(ref mut shm) = shm_opt {
                     let eof = loop {
-                        let mut packet = Packet::default();
-                        match shm.socket.read(&mut packet) {
-                            Ok(0) => break true,
-                            Ok(_) => {
-                                unsafe {
-                                    shm.handle(&mut packet);
-                                }
-                                shm.socket.write(&packet)?;
+                        match shm.socket.next_request(SignalBehavior::Restart) {
+                            Ok(None) => break true,
+                            Ok(Some(request)) => {
+                                let response = request.handle_scheme_mut(shm);
+                                shm.socket.write_response(response, SignalBehavior::Restart)?;
                             },
-                            Err(err) => if err.kind() == io::ErrorKind::WouldBlock {
-                                break false;
-                            } else {
-                                return Err(Box::new(err));
-                            }
+                            Err(Error { errno: EAGAIN | EWOULDBLOCK }) => break false,
+                            Err(err) => return Err(err),
                         };
                     };
 
@@ -135,21 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if unmount {
                     shm_opt.take();
                 }
-            },
-            _ => ()
+            }
         }
     }
 
     Ok(())
-}
-fn post_fevent(file: &mut File, id: usize, flag: EventFlags) -> syscall::Result<()> {
-    file.write(&syscall::Packet {
-        a: syscall::SYS_FEVENT,
-        b: id,
-        c: flag.bits(),
-        d: 1,
-        ..Default::default()
-    })
-        .map(|_| ())
-        .map_err(|_| Error::new(error::EIO))
 }

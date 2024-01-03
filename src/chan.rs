@@ -1,12 +1,9 @@
-use crate::post_fevent;
 use std::{
     cmp,
     collections::{HashMap, VecDeque},
-    fs::{File, OpenOptions},
-    io,
-    os::unix::fs::OpenOptionsExt,
 };
-use syscall::{flag::*, error::*, Error, SchemeBlockMut, Result};
+use syscall::{flag::*, error::*, Error};
+use redox_scheme::SchemeBlockMut;
 
 #[derive(Debug, Default)]
 pub struct Client {
@@ -42,7 +39,6 @@ impl Default for Connection {
 
 #[derive(Debug, Default)]
 pub struct Handle {
-    id: usize,
     flags: usize,
     extra: Extra,
     path: Option<String>,
@@ -96,20 +92,15 @@ pub struct ChanScheme {
     handles: HashMap<usize, Handle>,
     listeners: HashMap<String, usize>,
     next_id: usize,
-    pub socket: File
+    pub socket: redox_scheme::Socket,
 }
 impl ChanScheme {
-    pub fn new() -> io::Result<Self> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             handles: HashMap::new(),
             listeners: HashMap::new(),
             next_id: 0,
-            socket: OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .custom_flags(O_NONBLOCK as i32)
-                .open(":chan")?
+            socket: redox_scheme::Socket::nonblock("chan")?,
         })
     }
 }
@@ -147,7 +138,7 @@ impl SchemeBlockMut for ChanScheme {
             // smoltcp sends writeable whenever a listener gets a
             // client, we'll do the same too (but also readable, why
             // not)
-            post_fevent(&mut self.socket, listener_id, EVENT_READ | EVENT_WRITE)?;
+            self.socket.post_fevent(listener_id, (EVENT_READ | EVENT_WRITE).bits())?;
         }
 
         self.handles.insert(new_id, new);
@@ -179,7 +170,7 @@ impl SchemeBlockMut for ChanScheme {
                             },
                             Extra::Listener(_) => panic!("newly created handle can't possibly be a listener")
                         }
-                        post_fevent(&mut self.socket, remote_id, EVENT_WRITE)?;
+                        self.socket.post_fevent(remote_id, EVENT_WRITE.bits())?;
 
                         new.path = listener_path;
 
@@ -204,7 +195,7 @@ impl SchemeBlockMut for ChanScheme {
                 // smoltcp sends writeable whenever a listener gets a
                 // client, we'll do the same too (but also readable,
                 // why not)
-                post_fevent(&mut self.socket, id, EVENT_READ | EVENT_WRITE)?;
+                self.socket.post_fevent(id, (EVENT_READ | EVENT_WRITE).bits())?;
 
                 self.handles.insert(new_id, new);
                 self.next_id += 1;
@@ -249,7 +240,7 @@ impl SchemeBlockMut for ChanScheme {
                     if client.buffer.len() == buf.len() {
                         // Send readable only if it wasn't readable
                         // before
-                        post_fevent(&mut self.socket, remote_id, EVENT_READ)?;
+                        self.socket.post_fevent(remote_id, EVENT_READ.bits())?;
                     }
                     Ok(Some(buf.len()))
                 },
@@ -316,7 +307,7 @@ impl SchemeBlockMut for ChanScheme {
                         if client.buffer.is_empty() {
                             // Post readable on EOF only if it wasn't
                             // readable before
-                            post_fevent(&mut self.socket, remote_id, EVENT_READ)?;
+                            self.socket.post_fevent(remote_id, EVENT_READ.bits())?;
                         }
                     },
                     Extra::Listener(_) => panic!("a client can't be connected to a listener!")

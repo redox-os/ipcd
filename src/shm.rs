@@ -1,12 +1,10 @@
 use std::{
     cmp,
     collections::{HashMap, hash_map::Entry},
-    fs::{File, OpenOptions},
-    io,
-    os::unix::fs::OpenOptionsExt,
     rc::Rc,
 };
-use syscall::{error::*, flag::O_NONBLOCK, Error, Map, SchemeMut, Result, Packet, KSMSG_MMAP_PREP, MapFlags, KSMSG_MMAP, PAGE_SIZE, MAP_PRIVATE};
+use syscall::{error::*, Error, Map, Result, MapFlags, PAGE_SIZE, MAP_PRIVATE};
+use redox_scheme::SchemeMut;
 
 #[derive(Default)]
 pub struct ShmHandle {
@@ -17,20 +15,15 @@ pub struct ShmScheme {
     maps: HashMap<Rc<str>, ShmHandle>,
     handles: HashMap<usize, Rc<str>>,
     next_id: usize,
-    pub socket: File
+    pub socket: redox_scheme::Socket,
 }
 impl ShmScheme {
-    pub fn new() -> io::Result<Self> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             maps: HashMap::new(),
             handles: HashMap::new(),
             next_id: 0,
-            socket: OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .custom_flags(O_NONBLOCK as i32)
-                .open(":shm")?
+            socket: redox_scheme::Socket::nonblock("shm")?,
         })
     }
 }
@@ -75,7 +68,7 @@ impl SchemeMut for ShmScheme {
         }
         Ok(0)
     }
-    fn mmap_prep(&mut self, id: usize, offset: u64, size: usize, flags: MapFlags) -> Result<usize> {
+    fn mmap_prep(&mut self, id: usize, offset: u64, size: usize, _: MapFlags) -> Result<usize> {
         let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
         let total_size = offset as usize + size;
         match self.maps.get_mut(path).expect("handle pointing to nothing").buffer {

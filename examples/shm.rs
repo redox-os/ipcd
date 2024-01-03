@@ -17,17 +17,21 @@ fn main() -> Result<(), io::Error> {
             syscall::fmap(file1.as_raw_fd() as usize, &syscall::Map {
                 offset: 0,
                 size: 128,
-                flags: syscall::PROT_READ | syscall::PROT_WRITE
+                flags: syscall::PROT_READ | syscall::PROT_WRITE | syscall::MAP_SHARED,
+                address: 0,
             }).map_err(from_syscall_error)? as *mut u8,
             128
         )
     };
+    // FIXME: While the length can be unaligned, the offset cannot. This test is incorrectly
+    // written.
     let two = unsafe {
         slice::from_raw_parts_mut(
             syscall::fmap(file2.as_raw_fd() as usize, &syscall::Map {
                 offset: 64,
                 size: 64,
-                flags: syscall::PROT_READ | syscall::PROT_WRITE
+                flags: syscall::PROT_READ | syscall::PROT_WRITE | syscall::MAP_SHARED,
+                address: 0,
             }).map_err(from_syscall_error)? as *mut u8,
             64
         )
