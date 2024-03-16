@@ -2,8 +2,8 @@
 
 use std::collections::VecDeque;
 use event::{EventQueue, EventFlags};
-use redox_scheme::{SignalBehavior, Response};
-use syscall::{Error, Result, EAGAIN, EWOULDBLOCK, ENODEV};
+use redox_scheme::{CallRequest, RequestKind, Response, SignalBehavior};
+use syscall::{Error, Result, EAGAIN, EWOULDBLOCK, ENODEV, EINTR, KSMSG_CANCEL};
 
 mod chan;
 mod shm;
@@ -41,7 +41,11 @@ fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
     event_queue.subscribe(chan.socket.inner().raw(), EventSource::ChanSocket, EventFlags::READ)?;
     event_queue.subscribe(shm.socket.inner().raw(), EventSource::ShmSocket, EventFlags::READ)?;
 
-    let mut todo = VecDeque::with_capacity(16);
+    struct Todo {
+        req: Option<CallRequest>,
+        canceling: bool,
+    }
+    let mut todo = VecDeque::<Todo>::with_capacity(16);
 
     libredox::call::setrens(0, 0)?;
 
@@ -61,23 +65,39 @@ fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
                     let eof = loop {
                         match chan.socket.next_request(SignalBehavior::Restart) {
                             Ok(None) => break true,
-                            Ok(Some(request)) => todo.push_front(Some(request)),
+                            Ok(Some(request)) => match request.kind() {
+                                RequestKind::Call(request) => todo.push_front(Todo { req: Some(request), canceling: false }),
+                                RequestKind::Cancellation(request) => {
+                                    if let Some(affected_packet) = todo.iter_mut().find(|t| t.req.as_ref().map_or(false, |r| r.request().request_id() == request.id)) {
+                                        affected_packet.canceling = true;
+                                    }
+                                }
+                                _ => (),
+                            }
                             Err(Error { errno: EAGAIN | EWOULDBLOCK }) => break false,
                             Err(error) => return Err(error),
                         }
                     };
 
                     // Process queue, delete finished items
-                    todo.retain_mut(|request_opt| {
-                        match request_opt.take().unwrap().handle_scheme_block_mut(chan) {
+                    todo.retain_mut(|slot| {
+                        let req = slot.req.take().unwrap();
+
+                        match req.handle_scheme_block_mut(chan) {
                             Ok(res) => {
                                 if let Err(err) = chan.socket.write_response(res, SignalBehavior::Restart) {
                                     error = Some(err);
                                 }
-                                return false;
+                                false
+                            }
+                            Err(req) if slot.canceling => {
+                                if let Err(err) = chan.socket.write_response(Response::new(&req, Err(Error::new(EINTR))), SignalBehavior::Restart) {
+                                    error = Some(err);
+                                }
+                                false
                             }
                             Err(req) => {
-                                *request_opt = Some(req);
+                                slot.req = Some(req);
                                 true
                             }
                         }
@@ -89,8 +109,13 @@ fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
                 };
 
                 if unmount && let Some(chan) = chan_opt.take() {
-                    for req in todo.drain(..) {
-                        if let Err(err) = chan.socket.write_response(Response::new(&req.unwrap(), Err(Error::new(ENODEV))), SignalBehavior::Restart) {
+                    for slot in todo.drain(..) {
+                        let res = if slot.canceling {
+                            Err(Error::new(EINTR))
+                        } else {
+                            Err(Error::new(ENODEV))
+                        };
+                        if let Err(err) = chan.socket.write_response(Response::new(&slot.req.unwrap(), res), SignalBehavior::Restart) {
                             error = Some(err);
                         }
                     }
@@ -105,9 +130,12 @@ fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
                     let eof = loop {
                         match shm.socket.next_request(SignalBehavior::Restart) {
                             Ok(None) => break true,
-                            Ok(Some(request)) => {
-                                let response = request.handle_scheme_mut(shm);
-                                shm.socket.write_response(response, SignalBehavior::Restart)?;
+                            Ok(Some(request)) => match request.kind() {
+                                RequestKind::Call(request) => {
+                                    let response = request.handle_scheme_mut(shm);
+                                    shm.socket.write_response(response, SignalBehavior::Restart)?;
+                                }
+                                _ => (),
                             },
                             Err(Error { errno: EAGAIN | EWOULDBLOCK }) => break false,
                             Err(err) => return Err(err),
