@@ -58,13 +58,12 @@ dependencies = [
 
 [[package]]
 name = "redox_event"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fe498288c246de6b2df9be919cffe7d144480b2f1829f3fa987aa3ee067a04a"
+checksum = "69609faa5d5992247a4ef379917bb3e39be281405d6a0ccd4f942429400b956f"
 dependencies = [
  "bitflags",
  "libredox",
- "redox_syscall",
 ]
 
 [[package]]
