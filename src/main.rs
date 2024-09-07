@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use event::{EventQueue, EventFlags};
 use redox_scheme::{CallRequest, RequestKind, Response, SignalBehavior};
-use syscall::{Error, Result, EAGAIN, EWOULDBLOCK, ENODEV, EINTR, KSMSG_CANCEL};
+use syscall::{Error, Result, EAGAIN, EWOULDBLOCK, ENODEV, EINTR};
 
 mod chan;
 mod shm;
@@ -84,19 +84,19 @@ fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
                         let req = slot.req.take().unwrap();
 
                         match req.handle_scheme_block_mut(chan) {
-                            Ok(res) => {
+                            Some(res) => {
                                 if let Err(err) = chan.socket.write_response(res, SignalBehavior::Restart) {
                                     error = Some(err);
                                 }
                                 false
                             }
-                            Err(req) if slot.canceling => {
+                            None if slot.canceling => {
                                 if let Err(err) = chan.socket.write_response(Response::new(&req, Err(Error::new(EINTR))), SignalBehavior::Restart) {
                                     error = Some(err);
                                 }
                                 false
                             }
-                            Err(req) => {
+                            None => {
                                 slot.req = Some(req);
                                 true
                             }

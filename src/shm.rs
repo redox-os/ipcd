@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 use syscall::{error::*, Error, Map, Result, MapFlags, PAGE_SIZE, MAP_PRIVATE};
-use redox_scheme::SchemeMut;
+use redox_scheme::{SchemeMut, V2};
 
 #[derive(Default)]
 pub struct ShmHandle {
@@ -23,7 +23,7 @@ impl ShmScheme {
             maps: HashMap::new(),
             handles: HashMap::new(),
             next_id: 0,
-            socket: redox_scheme::Socket::nonblock("shm")?,
+            socket: redox_scheme::Socket::<V2>::nonblock("shm")?,
         })
     }
 }

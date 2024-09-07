@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, VecDeque},
 };
 use syscall::{flag::*, error::*, Error};
-use redox_scheme::SchemeBlockMut;
+use redox_scheme::{SchemeBlockMut, V2};
 
 #[derive(Debug, Default)]
 pub struct Client {
@@ -100,7 +100,7 @@ impl ChanScheme {
             handles: HashMap::new(),
             listeners: HashMap::new(),
             next_id: 0,
-            socket: redox_scheme::Socket::nonblock("chan")?,
+            socket: redox_scheme::Socket::<V2>::nonblock("chan")?,
         })
     }
 }
@@ -228,7 +228,7 @@ impl SchemeBlockMut for ChanScheme {
     //  | | |_| | | (_>  < | |___| |__| |_| |___) | |___
     // |___\___/   \___/\/  \____|_____\___/|____/|_____|
 
-    fn write(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
+    fn write(&mut self, id: usize, buf: &[u8], _offset: u64, flags: u32) -> Result<Option<usize>> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
         let client = handle.require_client()?;
 
@@ -248,7 +248,7 @@ impl SchemeBlockMut for ChanScheme {
             }
         } else if client.remote == Connection::Closed {
             Err(Error::new(EPIPE))
-        } else if handle.flags & O_NONBLOCK == O_NONBLOCK {
+        } else if (flags as usize) & O_NONBLOCK == O_NONBLOCK {
             Err(Error::new(EAGAIN))
         } else {
             Ok(None)
@@ -276,7 +276,7 @@ impl SchemeBlockMut for ChanScheme {
             .ok_or(Error::new(EBADF))
             .and(Ok(Some(id)))
     }
-    fn read(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn read(&mut self, id: usize, buf: &mut [u8], _offset: u64, flags: u32) -> Result<Option<usize>> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
         let client = handle.require_client()?;
 
@@ -288,7 +288,7 @@ impl SchemeBlockMut for ChanScheme {
         } else if client.remote == Connection::Closed {
             // Remote dropped, send EOF
             Ok(Some(0))
-        } else if handle.flags & O_NONBLOCK == O_NONBLOCK {
+        } else if (flags as usize) & O_NONBLOCK == O_NONBLOCK {
             Err(Error::new(EAGAIN))
         } else {
             Ok(None)
